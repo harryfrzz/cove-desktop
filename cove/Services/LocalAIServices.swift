@@ -1,4 +1,52 @@
+import AppKit
 import Foundation
+import Vision
+
+/// Text recognition through Vision's on-device engine. Nothing leaves the Mac,
+/// and no model file ships with the app — the recogniser is part of the OS.
+///
+/// `.accurate` rather than `.fast`: this runs once per capture on a background
+/// actor, where a few hundred milliseconds cost nothing, and the text it finds
+/// is what the item is searchable by for the rest of its life.
+struct VisionOCRService: OCRService {
+    func recognizeText(in image: NSImage) async throws -> String {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            throw OCRError.undecodableImage
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let request = VNRecognizeTextRequest { request, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                let observations = request.results as? [VNRecognizedTextObservation] ?? []
+                // Vision returns observations in reading order; one line each,
+                // joined so a paragraph in a screenshot stays a paragraph.
+                let lines = observations.compactMap { $0.topCandidates(1).first?.string }
+                continuation.resume(returning: lines.joined(separator: "\n"))
+            }
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+
+            do {
+                try VNImageRequestHandler(cgImage: cgImage).perform([request])
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    enum OCRError: LocalizedError {
+        case undecodableImage
+
+        var errorDescription: String? {
+            switch self {
+            case .undecodableImage: "The image could not be read for text recognition."
+            }
+        }
+    }
+}
 
 /// Enrichment without a model: tags and a short title read straight off what
 /// the capture already told us — the kind, the host, the file extension, the

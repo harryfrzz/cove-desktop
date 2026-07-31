@@ -3,11 +3,10 @@ import SwiftUI
 
 /// The on-device stack, as protocols.
 ///
-/// Phase 1 (this one) ships capture, storage, categorisation, and search
-/// without any model behind them: `embeddings` and `ocr` are `nil`, and
+/// OCR is live and runs through Vision. `embeddings` is still `nil`, and
 /// `enrichment` derives what it can from the text a capture already carries.
-/// Everything that will eventually need a model goes through these protocols so
-/// switching them on is a change to `AIServices.current` and nothing else.
+/// Everything that needs a model goes through these protocols so switching one
+/// on is a change to `AIServices.current` and nothing else.
 protocol EmbeddingService: Sendable {
     func embed(image: NSImage) async throws -> [Float]
     func embed(text: String) async throws -> [Float]
@@ -33,16 +32,15 @@ struct AIServices: Sendable {
     /// indistinguishable from a real one downstream and would quietly poison
     /// every similarity the search eventually runs.
     let embeddings: (any EmbeddingService)?
-    /// `nil` until Vision OCR is wired up.
     let ocr: (any OCRService)?
     let enrichment: any EnrichmentService
     let search: any SearchService
 
-    /// What Cove runs today: local heuristics plus literal keyword search.
+    /// What Cove runs today: Vision OCR, local heuristics, keyword search.
     static let local: AIServices = {
         AIServices(
             embeddings: nil,
-            ocr: nil,
+            ocr: VisionOCRService(),
             enrichment: LocalEnrichmentService(),
             search: KeywordSearchService()
         )
