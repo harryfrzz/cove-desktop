@@ -11,6 +11,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: NotchController?
     private var statusItem: NSStatusItem?
+    private let windowController = CoveWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -53,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.addItem(
+            withTitle: "Open Window",
+            action: #selector(openWindow),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(
             withTitle: "Open Cove",
             action: #selector(openIsland),
             keyEquivalent: ""
@@ -71,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
         statusItem = item
+    }
+
+    @objc private func openWindow() {
+        windowController.show()
     }
 
     @objc private func openIsland() {
