@@ -1,6 +1,7 @@
 import AppKit
 import SwiftData
 import UniformTypeIdentifiers
+import WidgetKit
 
 /// Everything that turns something the user handed Cove — a drag, the
 /// clipboard, an open panel, a typed note — into shelf items.
@@ -189,6 +190,11 @@ enum CaptureIngest {
         }
         context.insert(item)
         try? context.save()
+
+        // The widget reads this same store but cannot watch it; a nudge here is
+        // what turns a capture into a refreshed card. Cheap, and coalesced by
+        // WidgetKit if several land at once.
+        WidgetCenter.shared.reloadAllTimelines()
 
         let id = item.id
         Task {
