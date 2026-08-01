@@ -15,3 +15,6 @@ Package.resolved
 
 # macOS
 .DS_Store
+
+# Local signing identity (see Config/Signing.xcconfig)
+Config/Signing.local.xcconfig

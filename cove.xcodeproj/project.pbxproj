@@ -37,6 +37,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		18CC7020301E700000C77B86 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Signing.xcconfig; path = Config/Signing.xcconfig; sourceTree = "<group>"; };
 		18CC6FEC301E617400C77B86 /* CoveWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CoveWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		18CC6FEE301E617400C77B86 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		18CC6FF0301E617400C77B86 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
@@ -114,6 +115,7 @@
 		CCDD2089301CF39A0095E58A = {
 			isa = PBXGroup;
 			children = (
+				18CC7020301E700000C77B86 /* Signing.xcconfig */,
 				CCDD2094301CF39A0095E58A /* cove */,
 				18CC6FF2301E617400C77B86 /* CoveWidget */,
 				18CC6FED301E617400C77B86 /* Frameworks */,
@@ -268,7 +270,7 @@
 				CODE_SIGN_ENTITLEMENTS = CoveWidget/CoveWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = Z74D2LXWBT;
+				DEVELOPMENT_TEAM = "$(COVE_DEVELOPMENT_TEAM)";
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CoveWidget/Info.plist;
@@ -301,7 +303,7 @@
 				CODE_SIGN_ENTITLEMENTS = CoveWidget/CoveWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = Z74D2LXWBT;
+				DEVELOPMENT_TEAM = "$(COVE_DEVELOPMENT_TEAM)";
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CoveWidget/Info.plist;
@@ -328,6 +330,7 @@
 		};
 		CCDD209B301CF39B0095E58A /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 18CC7020301E700000C77B86 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -361,7 +364,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = Z74D2LXWBT;
+				DEVELOPMENT_TEAM = "$(COVE_DEVELOPMENT_TEAM)";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -392,6 +395,7 @@
 		};
 		CCDD209C301CF39B0095E58A /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 18CC7020301E700000C77B86 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -425,7 +429,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = Z74D2LXWBT;
+				DEVELOPMENT_TEAM = "$(COVE_DEVELOPMENT_TEAM)";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -455,7 +459,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = Z74D2LXWBT;
+				DEVELOPMENT_TEAM = "$(COVE_DEVELOPMENT_TEAM)";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -489,7 +493,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = Z74D2LXWBT;
+				DEVELOPMENT_TEAM = "$(COVE_DEVELOPMENT_TEAM)";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;

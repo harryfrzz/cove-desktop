@@ -1,0 +1,25 @@
+// Signing, kept out of the project file.
+//
+// `DEVELOPMENT_TEAM` is a property of the machine building the app, not of the
+// app. With it stored in `project.pbxproj`, Xcode rewrote it to whichever team
+// the current developer had, every checkout produced a spurious diff, and
+// committing one meant the other developer's build failed with "No Account for
+// Team".
+//
+// So the project reads `$(COVE_DEVELOPMENT_TEAM)` instead, and each machine
+// supplies it from `Signing.local.xcconfig` — which is ignored by git and never
+// leaves the Mac that made it.
+//
+// To set yours up:
+//
+//     echo 'COVE_DEVELOPMENT_TEAM = YOURTEAMID' > Config/Signing.local.xcconfig
+//
+// Your team id is in Xcode → Settings → Accounts, or on the Apple Developer
+// site under Membership.
+
+// Optional on purpose: a fresh clone builds without one. Signing is what fails
+// then, and it fails saying so, rather than the project refusing to open.
+#include? "Signing.local.xcconfig"
+
+// Left empty when no local file supplies it.
+COVE_DEVELOPMENT_TEAM = $(inherited)
