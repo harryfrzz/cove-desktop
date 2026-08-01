@@ -1,0 +1,3 @@
+// Copy to Signing.local.xcconfig and put your own team id in.
+// Xcode → Settings → Accounts shows it, as does the Apple Developer site.
+COVE_DEVELOPMENT_TEAM = YOURTEAMID

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftData
 import SwiftUI
+import WidgetKit
 
 /// Brings the island up and keeps a way back to it in the menu bar.
 ///
@@ -12,12 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: NotchController?
     private var statusItem: NSStatusItem?
     private let windowController = CoveWindowController()
+    /// The stamps already acted on, so a widget's note is honoured once and not
+    /// re-run on every unrelated activation.
+    private var lastHandledPasteStamp: Double = 0
+    private var lastHandledOpenStamp: Double = 0
+    private var lastHandledImportStamp: Double = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
         controller = NotchController()
         buildStatusItem()
+        observeWidgetIntents()
 
 #if DEBUG
         // Lets a screenshot run catch the open state; hovering the notch is
@@ -36,6 +43,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    /// Listens for the widget's buttons.
+    ///
+    /// `openAppWhenRun` runs an intent's `perform()` in *this* process, so the
+    /// notification it posts arrives here directly — which is the only reliable
+    /// signal. Activation happens before `perform()` does, so a tap's stamp is
+    /// always written after `applicationDidBecomeActive` has already read the
+    /// old one; relying on that alone meant the buttons quietly did nothing.
+    private func observeWidgetIntents() {
+        let centre = NotificationCenter.default
+        centre.addObserver(
+            forName: .coveIntentPaste, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.redeem(.paste) }
+        }
+        centre.addObserver(
+            forName: .coveIntentOpen, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.redeem(.open) }
+        }
+        centre.addObserver(
+            forName: .coveIntentImport, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.redeem(.importFile) }
+        }
+    }
+
+    private enum WidgetAction { case paste, open, importFile }
+
+    /// Runs one widget action and clears its stamp, so the fallback below does
+    /// not run it a second time.
+    private func redeem(_ action: WidgetAction) {
+        let defaults = UserDefaults(suiteName: PasteIntoCoveIntent.appGroupID)
+        NSApp.activate()
+
+        switch action {
+        case .paste:
+            lastHandledPasteStamp = Date.now.timeIntervalSince1970
+            defaults?.removeObject(forKey: PasteIntoCoveIntent.pendingKey)
+            pasteIntoCove()
+        case .open:
+            lastHandledOpenStamp = Date.now.timeIntervalSince1970
+            defaults?.removeObject(forKey: OpenCoveIntent.pendingKey)
+            windowController.show()
+        case .importFile:
+            lastHandledImportStamp = Date.now.timeIntervalSince1970
+            defaults?.removeObject(forKey: AddFileToCoveIntent.pendingKey)
+            CaptureIngest.importFromOpenPanel(into: CoveStore.shared.mainContext)
+        }
+    }
+
+    /// The fallback for a cold launch, where the intent may have run before
+    /// this delegate was listening. Anything already handled above has had its
+    /// stamp cleared, so nothing runs twice.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        let defaults = UserDefaults(suiteName: PasteIntoCoveIntent.appGroupID)
+
+        let pasteStamp = defaults?.double(forKey: PasteIntoCoveIntent.pendingKey) ?? 0
+        if pasteStamp > lastHandledPasteStamp {
+            lastHandledPasteStamp = pasteStamp
+            defaults?.removeObject(forKey: PasteIntoCoveIntent.pendingKey)
+            pasteIntoCove()
+        }
+
+        let openStamp = defaults?.double(forKey: OpenCoveIntent.pendingKey) ?? 0
+        if openStamp > lastHandledOpenStamp {
+            lastHandledOpenStamp = openStamp
+            defaults?.removeObject(forKey: OpenCoveIntent.pendingKey)
+            windowController.show()
+        }
+
+        let importStamp = defaults?.double(forKey: AddFileToCoveIntent.pendingKey) ?? 0
+        if importStamp > lastHandledImportStamp {
+            lastHandledImportStamp = importStamp
+            defaults?.removeObject(forKey: AddFileToCoveIntent.pendingKey)
+            CaptureIngest.importFromOpenPanel(into: CoveStore.shared.mainContext)
+        }
+    }
 
     /// Clicking the Dock tile (there isn't one) or reopening from Launchpad
     /// unfolds the island rather than doing nothing.
