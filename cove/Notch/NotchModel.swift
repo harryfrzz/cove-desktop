@@ -47,6 +47,15 @@ final class NotchModel {
     /// screenshot can catch the open state.
     var holdsOpen = false
 
+    /// A screenshot has just been taken and the island is asking what to do
+    /// with it.
+    ///
+    /// Held here rather than in the panel's own state because the controller is
+    /// what acts on it: the island has to be opened to ask the question, and the
+    /// question has to time out on its own — nobody asked to be interrupted, so
+    /// an unanswered offer must not leave the panel hanging open.
+    var screenshotOffer: ScreenshotWatcher.Capture?
+
     /// What has been typed into the prompt bar.
     var promptText = ""
 
@@ -80,7 +89,12 @@ final class NotchModel {
     var notchSize: CGSize { metrics.notchSize }
 
     /// Auto-close is only allowed when the user is plainly not using the panel.
+    ///
+    /// A screenshot offer blocks it too, and is dismissed by its own timer
+    /// instead: the ordinary close runs 260 ms after the pointer leaves, and the
+    /// pointer is nowhere near the notch when a screenshot lands — so the
+    /// question would be gone before it had been read.
     var allowsAutoClose: Bool {
-        !isEditing && !isDropTargeted && !holdsOpen
+        !isEditing && !isDropTargeted && !holdsOpen && screenshotOffer == nil
     }
 }

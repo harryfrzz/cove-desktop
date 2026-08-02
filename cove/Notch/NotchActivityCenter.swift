@@ -66,8 +66,28 @@ final class NotchActivityCenter {
     private init() {}
 
     /// Whether the island has anything to say while closed.
+    ///
+    /// Holding something counts, and it is the one entry here that does not
+    /// expire. Everything else is a moment — a capture in flight, a word about
+    /// one that landed — and falls back into the notch on its own. A parked file
+    /// stays parked until it is taken somewhere or Cove quits, and an island
+    /// that closed over it would be hiding the only evidence that it is there.
     var hasActivity: Bool {
-        !inFlight.isEmpty || recentlyFinished != nil || toast != nil || isDropTargeted
+        !inFlight.isEmpty
+            || recentlyFinished != nil
+            || toast != nil
+            || isDropTargeted
+            || !TempTray.shared.isEmpty
+    }
+
+    /// What is being held, if anything. Read by the compact strip.
+    var held: TempTray.Entry? { TempTray.shared.latest }
+    var heldCount: Int { TempTray.shared.entries.count }
+
+    /// Called by `TempTray` whenever what it holds changes, so the closed island
+    /// can grow to say so or fall back into the notch once it is empty.
+    func trayDidChange() {
+        announce()
     }
 
     /// The one snapshot the compact strip shows when several are in flight: the

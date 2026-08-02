@@ -21,6 +21,11 @@ final class NotchController: NSObject {
     private var openTask: Task<Void, Never>?
     private var closeTask: Task<Void, Never>?
     private var shrinkTask: Task<Void, Never>?
+    private var offerTask: Task<Void, Never>?
+    /// Whether the pointer is on the island right now. Read when a screenshot
+    /// arrives: an offer that appears under the pointer is being looked at, and
+    /// must not start counting down.
+    private var isHovered = false
 
     private let dragWatcher = DragWatcher()
     /// A drag session is live nearby, so the window is holding a wider frame
@@ -39,6 +44,14 @@ final class NotchController: NSObject {
     /// Longer than the open delay on purpose: leaving by accident (reaching for
     /// a control near the edge) is far more likely than arriving by accident.
     private static let closeDelay: Duration = .milliseconds(260)
+    /// How long an unanswered screenshot offer stays up. Long enough to notice
+    /// something appeared, read it, and reach for it; short enough that an
+    /// ignored question is not a panel left covering the top of the screen.
+    private static let offerDelay: Duration = .seconds(6)
+    /// The shorter countdown used after the pointer has been on the offer and
+    /// left again. The question has been read by then, so leaving is an answer
+    /// of sorts.
+    private static let offerLingerDelay: Duration = .seconds(2)
     private static let morph = Animation.spring(response: 0.34, dampingFraction: 0.82)
 
     override init() {
@@ -53,6 +66,7 @@ final class NotchController: NSObject {
         observeScreenChanges()
         observeActivity()
         observeFocusLoss()
+        observeScreenshots()
     }
 
     // MARK: - Building
@@ -187,9 +201,16 @@ final class NotchController: NSObject {
     // MARK: - Hover
 
     private func hoverChanged(_ isInside: Bool) {
+        isHovered = isInside
+
         if isInside {
             closeTask?.cancel()
             closeTask = nil
+            // Reaching the offer is engaging with it, so the countdown stops
+            // until the pointer leaves again. Reading a question should not be
+            // a race against it.
+            offerTask?.cancel()
+            offerTask = nil
             guard model.state != .open, model.opensOnHover else { return }
             openTask?.cancel()
             openTask = Task { [weak self] in
@@ -200,7 +221,13 @@ final class NotchController: NSObject {
         } else {
             openTask?.cancel()
             openTask = nil
-            scheduleClose()
+            // An offer blocks the ordinary auto-close, so it has to be given a
+            // countdown of its own here or leaving would strand it open.
+            if model.screenshotOffer != nil {
+                scheduleOfferDismissal(after: Self.offerLingerDelay)
+            } else {
+                scheduleClose()
+            }
         }
     }
 
@@ -297,8 +324,14 @@ final class NotchController: NSObject {
     func close() {
         openTask?.cancel()
         closeTask?.cancel()
+        offerTask?.cancel()
+        offerTask = nil
         model.promptText = ""
         model.isEditing = false
+        // Every way out of the island is also a way out of the question — the
+        // timer, Escape, a click elsewhere, and answering it. Closing is the one
+        // place all of them meet.
+        model.screenshotOffer = nil
         transition(to: NotchActivityCenter.shared.hasActivity ? .activity : .closed)
         releaseFocus()
     }
@@ -379,6 +412,58 @@ final class NotchController: NSObject {
         NotchActivityCenter.shared.onActivityChange = { [weak self] hasActivity in
             guard let self, self.model.state != .open else { return }
             self.transition(to: hasActivity ? .activity : .closed)
+        }
+    }
+
+    // MARK: - Screenshots
+
+    /// Hands each new screenshot to the island as a question.
+    ///
+    /// The watcher is started here rather than in the app delegate so the one
+    /// object that can act on a capture is also the one that turns the source
+    /// on: a watcher running with nothing listening would read the folder for
+    /// no reason.
+    private func observeScreenshots() {
+        ScreenshotWatcher.shared.onCapture = { [weak self] capture in
+            self?.offerScreenshot(capture)
+        }
+        ScreenshotWatcher.shared.start()
+    }
+
+    /// Opens the island with the screenshot in it.
+    ///
+    /// Deliberately without taking focus. A screenshot is taken in the middle of
+    /// doing something else, and stealing the keyboard to ask a question nobody
+    /// invited is worse than the question going unanswered — `open()` only
+    /// orders the panel front, and focus is still taken on the first click, as
+    /// everywhere else in the island.
+    private func offerScreenshot(_ capture: ScreenshotWatcher.Capture) {
+        // Never over a sentence being typed. The offer takes the panel, and
+        // dismissing it clears the prompt with everything in it — so someone
+        // mid-question would lose it to a question they did not ask. The file is
+        // still in its folder either way, which makes staying quiet the cheap
+        // side of this trade.
+        guard !model.isEditing else { return }
+
+        // A second shot while the first is still being asked about replaces it.
+        // Stacking them would queue questions about work the user has already
+        // moved on from.
+        model.screenshotOffer = capture
+        open()
+
+        // An offer that arrives under the pointer is already being looked at;
+        // the countdown starts when the pointer leaves.
+        guard !isHovered else { return }
+        scheduleOfferDismissal(after: Self.offerDelay)
+    }
+
+    private func scheduleOfferDismissal(after delay: Duration) {
+        offerTask?.cancel()
+        offerTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            guard let self, self.model.screenshotOffer != nil else { return }
+            self.close()
         }
     }
 

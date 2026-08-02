@@ -105,6 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// this delegate was listening. Anything already handled above has had its
     /// stamp cleared, so nothing runs twice.
     func applicationDidBecomeActive(_ notification: Notification) {
+        // Cheapest reliable moment to notice the screenshot folder has moved:
+        // changing it means going to the Screenshot app, which means having been
+        // somewhere other than here.
+        ScreenshotWatcher.shared.refreshLocation()
+
         let defaults = UserDefaults(suiteName: PasteIntoCoveIntent.appGroupID)
 
         let pasteStamp = defaults?.double(forKey: PasteIntoCoveIntent.pendingKey) ?? 0

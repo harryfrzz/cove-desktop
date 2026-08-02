@@ -28,9 +28,23 @@ struct HomePanel: View {
 
     private var page: Page { scrolledPage ?? .home }
 
-    private enum Page: Hashable, CaseIterable {
+    private enum Page: Hashable {
         case home
         case chats
+        /// Only there while something is held.
+        case tray
+    }
+
+    /// The pages that exist right now.
+    ///
+    /// The tray is last, and that is the load-bearing part rather than a
+    /// preference. It comes and goes with what it holds, and a page that appears
+    /// *between* two others moves the one after it — which leaves a paging
+    /// scroll view trying to hold a position that has slid out from under it,
+    /// parked between two pages. Appended at the end it moves nothing, so it can
+    /// be conditional and the swipe stays honest.
+    private var pageOrder: [Page] {
+        tray.isEmpty ? [.home, .chats] : [.home, .chats, .tray]
     }
 
     /// Breathing room on every edge. Generous on purpose: the panel holds very
@@ -40,50 +54,23 @@ struct HomePanel: View {
     var body: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: max(notchHeight, 30))
-
-            if model.isDropTargeted {
-                DropTargets(model: model)
-                    .padding(.horizontal, Self.inset)
-                    .padding(.bottom, Self.inset)
-                    .transition(.opacity)
-            } else {
-                pages
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // Its own row rather than an overlay pinned to the bottom of
-                // the pages. Floating, the dots landed hard against the prompt
-                // bar and read as specks on it.
-                pageDots
-                    .padding(.top, 2)
-                    .padding(.bottom, 12)
-
-                if !tray.isEmpty {
-                    TrayStrip(tray: tray)
-                        .padding(.horizontal, Self.inset)
-                        .padding(.bottom, 14)
-                }
-
-                // Only on the home page. Asking something is what the mark is
-                // for; the history is for reading what was already asked, and
-                // on a panel this short the bar's height is the difference
-                // between three visible rows and five.
-                if page == .home {
-                    promptBar
-                        .padding(.horizontal, Self.inset)
-                        .padding(.bottom, Self.inset)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-            }
+            face
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.snappy(duration: 0.24), value: model.isDropTargeted)
-        .animation(.snappy(duration: 0.24), value: tray.entries.count)
+        .animation(.snappy(duration: 0.24), value: model.screenshotOffer?.id)
         .animation(.snappy(duration: 0.28), value: page)
         .onChange(of: page) { _, current in
             // A field that is gone should not still hold the keystrokes. Left
             // focused, typing on the history page would land in a prompt bar
             // that isn't on screen.
             if current != .home { isPromptFocused = false }
+        }
+        .onChange(of: tray.isEmpty) { _, isEmpty in
+            // The last thing held has been taken somewhere and its page went
+            // with it. Standing on a page that no longer exists leaves the
+            // scroll view showing nothing, so the panel walks back to the mark.
+            if isEmpty, scrolledPage == .tray { scrolledPage = .home }
         }
         // Escape closes, like any other transient panel.
         .onExitCommand { model.requestClose() }
@@ -97,6 +84,64 @@ struct HomePanel: View {
         }
         .onChange(of: isPromptFocused) { _, focused in
             model.isEditing = focused
+        }
+    }
+
+    /// Which of the panel's three faces is up: the drop targets, a screenshot
+    /// being asked about, or the pages.
+    ///
+    /// Split out of `body` because the type-checker was timing out on it. That
+    /// is not a style complaint — a body it cannot check in reasonable time is
+    /// one build away from not compiling at all.
+    @ViewBuilder
+    private var face: some View {
+        if model.isDropTargeted {
+            // The drop face outranks the offer, and it has to: `DropTargets` is
+            // what publishes the zone frames the drag is hit-tested against, so
+            // a screenshot landing mid-drag must not be allowed to unmount it.
+            // What the user is holding wins over a question Cove asked on its
+            // own.
+            DropTargets(model: model)
+                .padding(.horizontal, Self.inset)
+                .padding(.bottom, Self.inset)
+                .transition(.opacity)
+        } else if let offer = model.screenshotOffer {
+            ScreenshotOffer(
+                capture: offer,
+                onSave: { save(offer) },
+                onHold: { hold(offer) },
+                onDismiss: { model.requestClose() }
+            )
+            .padding(.horizontal, Self.inset)
+            .padding(.bottom, Self.inset)
+            .transition(.opacity)
+        } else {
+            deck
+        }
+    }
+
+    private var deck: some View {
+        VStack(spacing: 0) {
+            pages
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Its own row rather than an overlay pinned to the bottom of the
+            // pages. Floating, the dots landed hard against the prompt bar and
+            // read as specks on it.
+            pageDots
+                .padding(.top, 2)
+                .padding(.bottom, 12)
+
+            // Only on the home page. Asking something is what the mark is for;
+            // the other two are for reading what is already there, and on a
+            // panel this short the bar's height is the difference between three
+            // visible rows and five.
+            if page == .home {
+                promptBar
+                    .padding(.horizontal, Self.inset)
+                    .padding(.bottom, Self.inset)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         }
     }
 
@@ -114,6 +159,11 @@ struct HomePanel: View {
             let width = proxy.size.width
 
             ScrollView(.horizontal) {
+                // Written out rather than looped. `scrollPosition(id:)` tracks
+                // these by the identity attached here, and a `ForEach` over a
+                // computed array gives that identity a second owner — which is
+                // how a page that comes and goes ends up leaving the scroll view
+                // parked between two of them.
                 HStack(spacing: 0) {
                     // Padding inside the fixed width, not outside it. Applied
                     // after the frame it would add to the page's width, and the
@@ -126,6 +176,12 @@ struct HomePanel: View {
                     ChatHistoryPage(threads: threads)
                         .frame(width: width)
                         .id(Page.chats)
+
+                    if !tray.isEmpty {
+                        TrayPage(tray: tray)
+                            .frame(width: width)
+                            .id(Page.tray)
+                    }
                 }
                 .scrollTargetLayout()
             }
@@ -134,7 +190,7 @@ struct HomePanel: View {
             // paging scroll view is the thing that does, and it comes with the
             // rubber-banding at the ends and the velocity-aware snap that would
             // otherwise have to be written by hand.
-            .scrollTargetBehavior(.paging)
+            .scrollTargetBehavior(OnePageAtATime(pageWidth: width))
             .scrollIndicators(.never)
             .scrollPosition(id: $scrolledPage)
         }
@@ -142,7 +198,7 @@ struct HomePanel: View {
 
     private var pageDots: some View {
         HStack(spacing: 5) {
-            ForEach(Page.allCases, id: \.self) { candidate in
+            ForEach(pageOrder, id: \.self) { candidate in
                 Circle()
                     .fill(CoveTheme.ink.opacity(candidate == page ? 0.65 : 0.22))
                     .frame(width: 4, height: 4)
@@ -258,12 +314,75 @@ struct HomePanel: View {
         }
     }
 
+    // MARK: - Screenshots
+
+    /// Puts the screenshot on the shelf.
+    ///
+    /// Built from the bitmap the watcher already decoded rather than from the
+    /// path, for two reasons: the kind is known here to be a screenshot, where
+    /// `CaptureIngest` would have to infer it from a filename that is localised;
+    /// and the file's read access belongs to the watcher's folder scope, which
+    /// this way is used once, at the moment it is certainly still open.
+    private func save(_ capture: ScreenshotWatcher.Capture) {
+        guard let item = CaptureIngest.item(
+            from: capture.image,
+            title: capture.name,
+            sourceApp: capture.sourceApp,
+            kind: .screenshot,
+            sourceIdentifier: capture.url.path
+        ) else {
+            activity.post(.nothingToSave)
+            model.requestClose()
+            return
+        }
+
+        CaptureIngest.insert(item, into: modelContext)
+        activity.post(.saved(count: 1))
+        // Closing collapses the panel back to the activity strip, where the
+        // toast just posted is what the island says next — so answering the
+        // question is confirmed in the same place it was asked.
+        model.requestClose()
+    }
+
+    private func hold(_ capture: ScreenshotWatcher.Capture) {
+        TempTray.shared.add(fileURL: capture.url)
+        activity.post(.held(count: 1))
+        model.requestClose()
+    }
+
     private func captureClipboard() {
         guard let item = CaptureIngest.itemFromClipboard() else {
             activity.post(.nothingToSave)
             return
         }
         CaptureIngest.insert(item, into: modelContext)
+    }
+}
+
+// MARK: - Paging
+
+/// One page per gesture, however hard the swipe.
+///
+/// `.paging` snaps to page boundaries but does not limit how many it crosses: a
+/// flick carries two or three, so leaving the mark could land on the tray with
+/// the history never seen, and the panel appears to jump rather than turn. On a
+/// surface this small that reads as the gesture misfiring.
+///
+/// So every gesture is clamped to a single step from wherever it began.
+/// `originalTarget` is the resting position the scroll view started this
+/// interaction from, which is what makes "one step" mean one step from the page
+/// you were on rather than from wherever momentum had reached.
+private struct OnePageAtATime: ScrollTargetBehavior {
+    let pageWidth: CGFloat
+
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        guard pageWidth > 0 else { return }
+
+        let start = (context.originalTarget.rect.minX / pageWidth).rounded()
+        let proposed = (target.rect.minX / pageWidth).rounded()
+        let stepped = min(max(proposed, start - 1), start + 1)
+
+        target.rect.origin.x = stepped * pageWidth
     }
 }
 
@@ -426,6 +545,161 @@ private struct ChatHistoryPage: View {
     }
 }
 
+// MARK: - Screenshot offer
+
+/// The question the island asks itself, without being dropped on: a screenshot
+/// has just been taken, and here it is.
+///
+/// The two answers are the same two the drop face offers, in the same order and
+/// the same shapes. That is the point — a screenshot arriving on its own and a
+/// file dragged to the notch are the same decision, so learning it once should
+/// be enough. What is new is the third answer, which is to do nothing: this is
+/// the only surface in Cove that speaks first, so leaving the file exactly where
+/// macOS put it has to be as easy as taking it.
+private struct ScreenshotOffer: View {
+    let capture: ScreenshotWatcher.Capture
+    let onSave: () -> Void
+    let onHold: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            header
+            answers
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The shot itself, so there is no doubt which one is being asked about —
+    /// two screenshots in a row otherwise produce two identical questions.
+    private var header: some View {
+        HStack(spacing: 11) {
+            Image(nsImage: capture.image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 84, height: 52)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(CoveTheme.hairline, lineWidth: 1)
+                }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Screenshot taken")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CoveTheme.ink)
+
+                Text(capture.sourceApp ?? capture.name)
+                    .font(.system(size: 10))
+                    .foregroundStyle(CoveTheme.inkTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(CoveTheme.inkTertiary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Leave it where it is")
+            .accessibilityLabel("Dismiss")
+        }
+    }
+
+    private var answers: some View {
+        HStack(spacing: 14) {
+            answer(
+                title: "Hold here",
+                subtitle: "Until you quit",
+                systemImage: "tray.full",
+                tint: CoveTheme.ink,
+                perform: onHold
+            )
+
+            answer(
+                title: "Add to Cove",
+                subtitle: "Saved to the shelf",
+                systemImage: "square.stack.3d.up.fill",
+                tint: CoveTheme.accent,
+                perform: onSave
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Deliberately the drop target's own shape and states, driven by hover
+    /// rather than by a drag. A button that looked like a button here would make
+    /// the two ways of putting a screenshot on the shelf look like two features.
+    private func answer(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        tint: Color,
+        perform: @escaping () -> Void
+    ) -> some View {
+        ScreenshotAnswerButton(
+            title: title,
+            subtitle: subtitle,
+            systemImage: systemImage,
+            tint: tint,
+            perform: perform
+        )
+    }
+}
+
+private struct ScreenshotAnswerButton: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let tint: Color
+    let perform: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: perform) {
+            VStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 20, weight: .light))
+                    .foregroundStyle(isHovered ? tint : tint.opacity(0.65))
+
+                VStack(spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CoveTheme.ink)
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(CoveTheme.inkTertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                isHovered ? tint.opacity(0.14) : Color.white.opacity(0.03),
+                in: .rect(cornerRadius: 16)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(
+                        isHovered ? tint.opacity(0.85) : CoveTheme.hairline,
+                        style: StrokeStyle(lineWidth: isHovered ? 2 : 1, dash: isHovered ? [] : [5, 4])
+                    )
+            }
+            .scaleEffect(isHovered ? 1.02 : 1)
+            // The whole tile takes the click, not just the glyph and the words.
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.snappy(duration: 0.16), value: isHovered)
+        .accessibilityLabel("\(title), \(subtitle)")
+    }
+}
+
 // MARK: - Drop targets
 
 /// The choice a drag lands on: park it, or keep it.
@@ -507,22 +781,78 @@ private struct DropTargets: View {
 
 // MARK: - Tray
 
-/// What is parked right now: a row of chips, each one draggable straight back
-/// out to wherever it was headed.
-private struct TrayStrip: View {
+/// What is parked right now, as a page of its own.
+///
+/// This used to be a strip wedged under the pages, and it was the wrong shape
+/// for the job. A parked thing exists to be carried somewhere — the whole
+/// gesture is picking it back up and dropping it in another window — and a chip
+/// the height of a line of text is a small thing to aim at while the panel is
+/// also trying to be a prompt bar and a history. Given the page, each held thing
+/// can be big enough to grab and can show what it actually is.
+///
+/// The page only exists while something is held, so arriving here always means
+/// arriving at something.
+private struct TrayPage: View {
     @Bindable var tray: TempTray
 
+    @Environment(\.modelContext) private var modelContext
+
+    private static let inset: CGFloat = 22
+
+    /// Promotes a held thing to the shelf.
+    ///
+    /// It leaves the tray as it goes. Holding and saving are the two answers the
+    /// drop face offers and they are opposites — one lasts until Cove quits, the
+    /// other until you delete it — so a thing that is now both would be sitting
+    /// under a countdown it no longer needs. Nothing is lost by moving it: unlike
+    /// a drag out, which hands the thing to another app, this leaves it somewhere
+    /// Cove can still show you.
+    private func save(_ entry: TempTray.Entry) {
+        guard let item = entry.shelfItem() else {
+            NotchActivityCenter.shared.post(.nothingToSave)
+            return
+        }
+
+        CaptureIngest.insert(item, into: modelContext)
+        NotchActivityCenter.shared.post(.saved(count: 1))
+        tray.remove(entry)
+    }
+
+    /// Adaptive rather than a fixed column count: the panel is one width today,
+    /// but a held item is a fixed size and the row should fill whatever it is
+    /// given rather than leave a gap on the right.
+    private static let columns = [GridItem(.adaptive(minimum: 84), spacing: 9, alignment: .top)]
+
     var body: some View {
-        HStack(spacing: 8) {
-            ScrollView(.horizontal) {
-                HStack(spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+
+            // A grid rather than a row. A row put everything past the third item
+            // off the side of a panel that is already the width of a notch, and
+            // the whole point of the page is seeing what you are carrying. The
+            // scroll here is vertical, which also keeps it out of the way of the
+            // horizontal swipe between pages.
+            ScrollView(.vertical) {
+                LazyVGrid(columns: Self.columns, spacing: 10) {
                     ForEach(tray.entries) { entry in
-                        chip(entry)
+                        card(entry)
                     }
                 }
-                .padding(.horizontal, 1)
+                .padding(.horizontal, Self.inset)
+                .padding(.bottom, 6)
             }
             .scrollIndicators(.never)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(tray.entries.count == 1 ? "1 held" : "\(tray.entries.count) held")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(CoveTheme.inkTertiary)
+
+            Spacer(minLength: 0)
 
             Button {
                 tray.clear()
@@ -530,34 +860,179 @@ private struct TrayStrip: View {
                 Text("Clear")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(CoveTheme.inkTertiary)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Empty the holding shelf")
         }
-        .frame(height: 30)
+        .padding(.horizontal, Self.inset)
     }
 
-    private func chip(_ entry: TempTray.Entry) -> some View {
-        HStack(spacing: 6) {
-            Image(nsImage: entry.icon)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 16, height: 16)
+    /// One parked thing, sized to be picked up.
+    ///
+    /// `onDrag` is the entire point of the card. Everything else here — the
+    /// preview, the name, the remove button — is in service of knowing which one
+    /// to grab.
+    private func card(_ entry: TempTray.Entry) -> some View {
+        VStack(spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(CoveTheme.raised)
+
+                if let preview = entry.preview {
+                    Image(nsImage: preview)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Image(nsImage: entry.icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 30, height: 30)
+                }
+            }
+            // Height fixed, width taken from the grid cell, so every row lines
+            // up whatever shape the things in it are.
+            .frame(height: 54)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(CoveTheme.hairline, lineWidth: 1)
+            }
+
             Text(entry.name)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(CoveTheme.ink)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(CoveTheme.inkSecondary)
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(CoveTheme.raised, in: Capsule())
+        // The card is the drag handle, so the whole of it has to be draggable —
+        // including the gap between the picture and the name. The overlay is
+        // what carries the drag, and it covers the card for the same reason.
+        .contentShape(Rectangle())
         .overlay {
-            Capsule().strokeBorder(CoveTheme.hairline, lineWidth: 1)
-        }
-        .onDrag { entry.provider() }
-        .contextMenu {
-            Button("Remove", systemImage: "xmark") { tray.remove(entry) }
+            TrayDragOut(
+                image: entry.preview ?? entry.icon,
+                pasteboardItem: entry.pasteboardItem,
+                onAccepted: { tray.handOff(entry) },
+                onSave: { save(entry) },
+                onRemove: { tray.remove(entry) }
+            )
         }
         .help(entry.name)
+    }
+}
+
+/// Drags a held thing out of the tray, and reports whether anything took it.
+///
+/// SwiftUI's `onDrag` hands over an item provider and then never speaks again.
+/// It cannot tell a drop that landed in another app from one released over the
+/// desktop and cancelled — and on that distinction rests whether the tray is
+/// allowed to let go. Dropping a file on nothing and finding Cove had forgotten
+/// it would be losing something the user was still carrying, which is the one
+/// thing a holding shelf must not do.
+///
+/// AppKit does say: `draggingSession(_:endedAt:operation:)` reports the
+/// operation the destination actually performed, and an empty one means nobody
+/// took it. So the drag is run here instead.
+private struct TrayDragOut: NSViewRepresentable {
+    let image: NSImage
+    let pasteboardItem: () -> any NSPasteboardWriting
+    let onAccepted: () -> Void
+    let onSave: () -> Void
+    let onRemove: () -> Void
+
+    func makeNSView(context: Context) -> TrayDragOutView {
+        let view = TrayDragOutView()
+        apply(to: view)
+        return view
+    }
+
+    func updateNSView(_ view: TrayDragOutView, context: Context) {
+        apply(to: view)
+    }
+
+    private func apply(to view: TrayDragOutView) {
+        view.image = image
+        view.pasteboardItem = pasteboardItem
+        view.onAccepted = onAccepted
+        view.onSave = onSave
+        view.onRemove = onRemove
+    }
+}
+
+final class TrayDragOutView: NSView, NSDraggingSource {
+    var image: NSImage?
+    var pasteboardItem: (() -> any NSPasteboardWriting)?
+    var onAccepted: (() -> Void)?
+    var onSave: (() -> Void)?
+    var onRemove: (() -> Void)?
+
+    /// The island is a non-activating panel and is usually not the key window.
+    /// Without this the first press only brings it forward and the drag it was
+    /// meant to start never happens.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Claims the press so the drag below it is delivered here. Deliberately
+    /// does nothing else: a click on a held thing is not an action, only the
+    /// beginning of a possible drag.
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let pasteboardItem, let image else { return }
+
+        let item = NSDraggingItem(pasteboardWriter: pasteboardItem())
+        item.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    /// Right-click is handled here rather than by a SwiftUI `contextMenu`: this
+    /// view covers the card, so a menu declared underneath it would never be
+    /// reached.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        // Keeping it comes first: it is the one of the two that cannot be
+        // undone by doing the other.
+        menu.addItem(
+            withTitle: "Add to Cove",
+            action: #selector(saveEntry),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(.separator())
+        menu.addItem(
+            withTitle: "Remove",
+            action: #selector(removeEntry),
+            keyEquivalent: ""
+        ).target = self
+        return menu
+    }
+
+    @objc private func saveEntry() {
+        onSave?()
+    }
+
+    @objc private func removeEntry() {
+        onRemove?()
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        // Copy rather than move: the file stays where it is. The tray holds a
+        // path, and taking it somewhere should not empty the place it came from.
+        .copy
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        endedAt screenPoint: NSPoint,
+        operation: NSDragOperation
+    ) {
+        // An empty operation is a drag that was let go over nothing, or refused.
+        // The thing is still being carried, so the tray keeps it.
+        guard !operation.isEmpty else { return }
+        onAccepted?()
     }
 }

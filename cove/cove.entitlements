@@ -2,10 +2,27 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<key>com.apple.security.files.user-selected.read-only</key>
-	<true/>
+	<!--
+	  Cove runs outside the App Sandbox.
+
+	  It was inside it until the screenshot watcher, which is what forced the
+	  question: a sandboxed app cannot read `com.apple.screencapture`'s own
+	  `location` preference — the domain resolves to the container and comes back
+	  empty — so it cannot know where screenshots go. The only way in was to make
+	  the user point at the folder through an open panel and keep the grant as a
+	  bookmark, which asks a question Cove already had the means to answer, and
+	  quietly breaks the day they move the folder.
+
+	  The sandbox bought nothing else here. Cove is distributed through GitHub
+	  releases rather than the App Store, so nothing required it, and everything
+	  it does is still local: the one network call is link previews, behind its
+	  own switch. Access to Desktop and Documents is now governed by TCC, which
+	  asks once, in the system's own words, and can be revoked in System Settings
+	  — a better contract than a folder grant buried in Cove's own preferences.
+
+	  The widget extension keeps its sandbox: WidgetKit requires it, and the app
+	  group below is what the two of them share the store through.
+	-->
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.loop.cove</string>

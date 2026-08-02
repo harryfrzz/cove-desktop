@@ -225,11 +225,30 @@ private struct NotchActivityStrip: View {
                     headline.phase == .failed ? .red : CoveTheme.accent
                 )
                 .symbolEffect(.pulse, isActive: headline.phase != .done)
+        } else if let held = activity.held {
+            // The thing itself, not a glyph standing for it. This strip is the
+            // only reminder that something is being carried, and a tray icon
+            // says "something" where the screenshot says which.
+            heldThumbnail(held)
         } else {
             Circle()
                 .fill(CoveTheme.accent)
                 .frame(width: 6, height: 6)
         }
+    }
+
+    /// Sized to the strip rather than to the image: everything held has to line
+    /// up at the same height beside the notch, whatever shape it came in.
+    private func heldThumbnail(_ entry: TempTray.Entry) -> some View {
+        Image(nsImage: entry.preview ?? entry.icon)
+            .resizable()
+            .aspectRatio(contentMode: entry.preview == nil ? .fit : .fill)
+            .frame(width: 26, height: 18)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(CoveTheme.ink.opacity(0.22), lineWidth: 1)
+            }
     }
 
     @ViewBuilder
@@ -256,6 +275,14 @@ private struct NotchActivityStrip: View {
                         .background(Color.white.opacity(0.14), in: Capsule())
                 }
             }
+        } else if activity.heldCount > 0 {
+            // Counted rather than named. A filename does not survive this width,
+            // and how many things are in hand is the part that decides whether
+            // you go and get them.
+            Text(activity.heldCount == 1 ? "1 held" : "\(activity.heldCount) held")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(CoveTheme.inkSecondary)
+                .lineLimit(1)
         }
     }
 

@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var installer = MobileCLIPInstaller.shared
     @State private var updater = UpdateChecker.shared
     @State private var appearance = CoveAppearanceStore.shared
+    @State private var screenshots = ScreenshotWatcher.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     appearanceSection
                     onThisMac
+                    screenshotSection
+                    holdingSection
                     modelSection
                     shelfSection
                     privacySection
@@ -90,6 +93,59 @@ struct SettingsView: View {
             .labelsHidden()
 
             Text("Sets the window's theme. The island stays dark — it meets the black notch and cannot have a seam.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The switch, and where Cove is watching.
+    ///
+    /// The folder is shown but not editable, because it is not Cove's to set:
+    /// macOS owns it, the Screenshot app's "Save to" menu is where it changes,
+    /// and a second control here would be a place for the two to disagree.
+    private var screenshotSection: some View {
+        SettingsSection("Screenshots") {
+            Toggle(
+                "Offer new screenshots on the island",
+                isOn: Binding(
+                    get: { screenshots.isEnabled },
+                    set: { screenshots.isEnabled = $0 }
+                )
+            )
+            .toggleStyle(.switch)
+
+            SettingsRow(
+                "Folder",
+                value: screenshots.folderPath ?? "Reading…",
+                badge: screenshots.isWatching ? "On" : nil,
+                tone: screenshots.isWatching ? .normal : .muted
+            )
+
+            if let failure = screenshots.failure {
+                SettingsRow("Problem", value: failure, tone: .warning)
+            }
+
+            Text("Take a screenshot and the island opens with it, offering the same two answers a drop does. Cove follows wherever macOS is set to save them — there is nothing to point it at. Only new screenshots are read, and only to ask about them; nothing is copied to the shelf unless you say so.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// What the holding shelf does once something has been carried off it.
+    private var holdingSection: some View {
+        SettingsSection("Holding shelf") {
+            Toggle(
+                "Let go once something is dropped",
+                isOn: Binding(
+                    get: { model.clearsHeldAfterDrag },
+                    set: { model.clearsHeldAfterDrag = $0 }
+                )
+            )
+            .toggleStyle(.switch)
+
+            Text("Off, a held thing stays on the island until you remove it — so the same file can be dropped in two places. On, it lets go as soon as something accepts it. A drag released over nothing is not a drop, and never clears it either way.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -246,6 +302,10 @@ private final class SettingsModel {
 
     var fetchLinkPreviews: Bool = LinkPreviewService.isEnabled {
         didSet { LinkPreviewService.setEnabled(fetchLinkPreviews) }
+    }
+
+    var clearsHeldAfterDrag: Bool = TempTray.clearsAfterDrag {
+        didSet { TempTray.setClearsAfterDrag(clearsHeldAfterDrag) }
     }
 
     func load() async {
