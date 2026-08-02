@@ -82,11 +82,9 @@ struct NotchShell: View {
                     lineWidth: model.state == .open ? 1 : 0
                 )
         }
-        .shadow(
-            color: .black.opacity(model.state == .open ? 0.55 : 0),
-            radius: 24,
-            y: 10
-        )
+        // No shadow. The panel is pure black and so is the notch it hangs from;
+        // a drop shadow under a black shape on a bright wallpaper reads as a
+        // grey halo around the island rather than as depth.
         .contentShape(NotchShape(bottomRadius: bottomRadius))
         // Clicking the closed pill is the keyboard-free way in, for when the
         // pointer is moving too fast for the hover delay to catch it.
@@ -114,6 +112,7 @@ struct NotchShell: View {
 
         if model.state == .activity {
             NotchActivityStrip(
+                width: islandSize.width,
                 notchWidth: notchWidth,
                 height: notchHeight + 10,
                 activity: activity
@@ -148,31 +147,73 @@ struct NotchShell: View {
 /// The closed island with something to say: one glyph and a line of status
 /// either side of the notch, in the spirit of the phone's Live Activity.
 private struct NotchActivityStrip: View {
+    let width: CGFloat
     let notchWidth: CGFloat
     let height: CGFloat
     let activity: NotchActivityCenter
 
+    /// The island may be clamped to the display width, so both status columns
+    /// must derive from the width it was actually given — never from a flexible
+    /// HStack proposal. That keeps the right-hand label inside the shape.
+    private var centerWidth: CGFloat { min(notchWidth, width) }
+    private var sideWidth: CGFloat { max(0, (width - centerWidth) / 2) }
+    /// Breathing room between the island's rounded edge and what it says. The
+    /// glyph and the word are the only things on this strip, and set flush to
+    /// the corner they read as having been cut off by it.
+    private var sideInset: CGFloat { min(20, sideWidth) }
+    private var sideContentWidth: CGFloat { max(0, sideWidth - sideInset) }
+
+    /// Whether the strip is reporting work still in progress.
+    ///
+    /// The band means "this is happening now" and nothing else. A capture that
+    /// has landed is a settled fact, so "Added" and "Saved" are plain text —
+    /// a shimmer there would say something is still running when nothing is.
+    /// A failure is settled too, and red that also moves reads as an alarm.
+    private var isWorking: Bool {
+        guard !activity.isDropTargeted, activity.toast == nil else { return false }
+        guard let headline = activity.headline else { return false }
+        return headline.phase != .done && headline.phase != .failed
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             leading
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 14)
+                .frame(width: sideContentWidth, alignment: .leading)
+                .clipped()
+                .padding(.leading, sideInset)
 
             // The notch itself. Nothing may be drawn here — on the hardware
             // this is the camera housing.
-            Color.clear.frame(width: notchWidth)
+            Color.clear.frame(width: centerWidth)
 
             trailing
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 14)
+                .frame(width: sideContentWidth, alignment: .trailing)
+                .clipped()
+                .padding(.trailing, sideInset)
         }
-        .frame(height: height)
+        .frame(width: width, height: height)
         .foregroundStyle(CoveTheme.ink)
     }
 
     @ViewBuilder
     private var leading: some View {
-        if activity.isDropTargeted {
+        // A toast outranks the pipeline here: it is the answer to something the
+        // user just did, and it only lasts a moment.
+        if let toast = activity.toast {
+            HStack(spacing: 5) {
+                Image(systemName: toast.systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(toast.isFailure ? .red : CoveTheme.accent)
+
+                if let count = toast.count {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.white.opacity(0.14), in: Capsule())
+                }
+            }
+        } else if activity.isDropTargeted {
             Label("Drop to save", systemImage: "tray.and.arrow.down.fill")
                 .labelStyle(.iconOnly)
                 .font(.system(size: 13, weight: .semibold))
@@ -194,9 +235,10 @@ private struct NotchActivityStrip: View {
     @ViewBuilder
     private var trailing: some View {
         if let toast = activity.toast {
-            Text(toast)
-                .font(.system(size: 11, weight: .medium))
+            Text(toast.text)
+                .font(.system(size: 11, weight: .semibold))
                 .lineLimit(1)
+                .minimumScaleFactor(0.85)
         } else if activity.isDropTargeted {
             Text("Drop to save")
                 .font(.system(size: 11, weight: .semibold))
@@ -205,6 +247,7 @@ private struct NotchActivityStrip: View {
                 Text(headline.phase.label)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
+                    .shimmeringStatus(isActive: isWorking)
                 if activity.inFlight.count > 1 {
                     Text("\(activity.inFlight.count)")
                         .font(.system(size: 10, weight: .semibold))
@@ -222,5 +265,22 @@ private struct NotchActivityStrip: View {
         case .failed: "exclamationmark.triangle.fill"
         default: "sparkles"
         }
+    }
+}
+
+private extension View {
+    /// The status word, with Cove's band running through it while a capture is
+    /// still being worked on.
+    ///
+    /// Only the word. The glyph beside it already carries its own motion — a
+    /// pulse while processing, a settled checkmark once saved — and a second
+    /// animation on the same small strip reads as two things happening rather
+    /// than one.
+    func shimmeringStatus(isActive: Bool) -> some View {
+        // Dimmed underneath, so the band has something to lift rather than
+        // washing over text that is already at full brightness.
+        opacity(isActive ? 0.55 : 1)
+            .coveShimmer(isActive: isActive)
+            .animation(.easeInOut(duration: 0.2), value: isActive)
     }
 }

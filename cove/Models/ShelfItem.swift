@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-enum ShelfItemKind: String, Codable, CaseIterable, Identifiable, Sendable {
+nonisolated enum ShelfItemKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case screenshot
     case image
     case link
@@ -33,7 +33,7 @@ enum ShelfItemKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum ShelfProcessingState: String, Codable, CaseIterable, Sendable {
+nonisolated enum ShelfProcessingState: String, Codable, CaseIterable, Sendable {
     case queued
     case processing
     case ready
@@ -69,6 +69,10 @@ final class ShelfItem {
     /// Manually pinned to the Wallet page. Receipts and tickets also land there
     /// on their own once a real extraction backs the category up.
     var isInWallet: Bool = false
+    /// When Cove last tried to read a link's own title and cover image. Set on
+    /// failure too: one attempt per link is the contract, so a dead host isn't
+    /// re-fetched on every refresh. Nil for everything that isn't a link.
+    var linkPreviewFetchedAt: Date?
     var processingStateRawValue: String
 
     var kind: ShelfItemKind {

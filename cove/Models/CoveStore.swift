@@ -8,7 +8,7 @@ import SwiftData
 /// The store lives in a shared App Group container, not the app's private one,
 /// so the widget extension — a separate process — reads the same shelf the app
 /// writes. Both sides resolve the same file through `appGroupID`.
-enum CoveStore {
+nonisolated enum CoveStore {
     /// The App Group both the app and the widget are entitled to. Changing this
     /// means changing it in both `.entitlements` files too, or the widget reads
     /// an empty store.

@@ -3,10 +3,10 @@ import SwiftUI
 
 /// The on-device stack, as protocols.
 ///
-/// OCR is live and runs through Vision. `embeddings` is still `nil`, and
-/// `enrichment` derives what it can from the text a capture already carries.
-/// Everything that needs a model goes through these protocols so switching one
-/// on is a change to `AIServices.current` and nothing else.
+/// OCR runs through Vision and embeddings through MobileCLIP's Core ML encoders;
+/// `enrichment` still derives what it can from the text a capture already
+/// carries. Everything that needs a model goes through these protocols so
+/// switching one on is a change to `AIServices.current` and nothing else.
 protocol EmbeddingService: Sendable {
     func embed(image: NSImage) async throws -> [Float]
     func embed(text: String) async throws -> [Float]
@@ -26,9 +26,9 @@ protocol SearchService: Sendable {
     func search(_ query: String, in items: [ShelfItem]) async throws -> [ShelfItem]
 }
 
-struct AIServices: Sendable {
-    /// `nil` until the MobileCLIP-style encoders land. The pipeline skips the
-    /// embedding steps rather than faking vectors — a random vector would be
+nonisolated struct AIServices: Sendable {
+    /// `nil` when MobileCLIP's encoders are not installed. The pipeline skips
+    /// the embedding steps rather than faking vectors — a random vector would be
     /// indistinguishable from a real one downstream and would quietly poison
     /// every similarity the search eventually runs.
     let embeddings: (any EmbeddingService)?
@@ -36,21 +36,37 @@ struct AIServices: Sendable {
     let enrichment: any EnrichmentService
     let search: any SearchService
 
-    /// What Cove runs today: Vision OCR, local heuristics, keyword search.
-    static let local: AIServices = {
+    /// What Cove runs today: Vision OCR, MobileCLIP embeddings, local
+    /// heuristics for enrichment, keyword search.
+    ///
+    /// Resolved on every read rather than cached in a `let`. Encoders can be
+    /// installed or removed from Settings while the app is running, and a stack
+    /// decided once at launch would keep reporting the state the app started
+    /// in — embeddings still off after installing them, or still on after
+    /// removing them. The three services below are empty structs; building them
+    /// again costs nothing worth caching.
+    static var local: AIServices {
         AIServices(
-            embeddings: nil,
+            embeddings: MobileCLIPEmbeddingService.isInstalled()
+                ? MobileCLIPEmbeddingService.shared
+                : nil,
             ocr: VisionOCRService(),
             enrichment: LocalEnrichmentService(),
             search: KeywordSearchService()
         )
-    }()
+    }
 
     static var current: AIServices { .local }
 
-    /// Version tag persisted with every stored embedding so a future model swap
-    /// can detect and re-index stale vectors. Nothing writes vectors yet.
-    static var currentEmbeddingModelVersion: String { "none" }
+    /// Version tag persisted with every stored embedding so a model swap can
+    /// detect and re-index stale vectors. Vectors from two different encoders
+    /// are not comparable, so this is what keeps a mixed shelf from quietly
+    /// returning nonsense.
+    static var currentEmbeddingModelVersion: String {
+        MobileCLIPEmbeddingService.isInstalled()
+            ? MobileCLIPModelDescriptor.current.id
+            : "none"
+    }
 }
 
 private struct AIServicesEnvironmentKey: EnvironmentKey {

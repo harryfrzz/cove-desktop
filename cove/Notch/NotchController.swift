@@ -247,26 +247,22 @@ final class NotchController: NSObject {
         }
 
         let count: Int
-        let verb: String
+        let landed: NotchToast
         switch zone {
         case .hold:
             count = TempTray.shared.add(pasteboard: pasteboard)
-            verb = "held"
+            landed = .held(count: count)
         case .save:
             count = CaptureIngest.ingest(
                 pasteboard: pasteboard,
                 into: CoveStore.shared.mainContext,
                 sourceApp: NSWorkspace.shared.frontmostApplication?.localizedName
             )
-            verb = "added"
+            landed = .saved(count: count)
         }
 
         endDrag()
-        NotchActivityCenter.shared.post(
-            count == 0
-                ? "Nothing Cove can hold in that drop"
-                : "\(count) item\(count == 1 ? "" : "s") \(verb)"
-        )
+        NotchActivityCenter.shared.post(count == 0 ? .nothingToSave : landed)
         return count > 0
     }
 

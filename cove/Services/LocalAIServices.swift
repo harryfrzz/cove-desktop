@@ -8,7 +8,7 @@ import Vision
 /// `.accurate` rather than `.fast`: this runs once per capture on a background
 /// actor, where a few hundred milliseconds cost nothing, and the text it finds
 /// is what the item is searchable by for the rest of its life.
-struct VisionOCRService: OCRService {
+nonisolated struct VisionOCRService: OCRService {
     func recognizeText(in image: NSImage) async throws -> String {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             throw OCRError.undecodableImage
@@ -56,7 +56,7 @@ struct VisionOCRService: OCRService {
 /// fields a reader has to be able to trust, and a plausible guess in a receipt
 /// total is worse than a blank. Everything typed stays empty until a real
 /// extraction fills it in.
-struct LocalEnrichmentService: EnrichmentService {
+nonisolated struct LocalEnrichmentService: EnrichmentService {
     func enrich(text: String, kind: ShelfItemKind) async throws -> ItemEnrichment {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let shortTitle = Self.shortTitle(from: cleaned)
@@ -119,7 +119,7 @@ struct LocalEnrichmentService: EnrichmentService {
 /// against stored embeddings, then fused with these results — is the next
 /// phase; the ranking below is what keeps the shelf usable meanwhile, and it is
 /// also what a semantic search cannot do: find an exact order number.
-struct KeywordSearchService: SearchService {
+nonisolated struct KeywordSearchService: SearchService {
     @MainActor
     func search(_ query: String, in items: [ShelfItem]) async throws -> [ShelfItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)

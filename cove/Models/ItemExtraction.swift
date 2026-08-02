@@ -2,7 +2,7 @@ import Foundation
 
 /// What the enrichment step of the pipeline produces. Persisted on `ShelfItem`
 /// (extraction as JSON) so the UI can surface typed fields.
-struct ItemEnrichment: Sendable {
+nonisolated struct ItemEnrichment: Sendable {
     var summary: String?
     var tags: [String]
     var extraction: ItemExtraction?
@@ -14,8 +14,22 @@ struct ItemEnrichment: Sendable {
 /// reads them is deliberately out of this phase. The shape is settled now so
 /// Wallet and Upcoming can be built against it, and so turning the model on
 /// later is a pipeline change rather than a schema migration.
-struct ItemExtraction: Codable, Sendable, Equatable {
+nonisolated struct ItemExtraction: Codable, Sendable, Equatable {
     var category: String
+
+    /// A broad, visual-only label used for photo albums. It is independent of
+    /// the existing extraction category (receipt, ticket, image, etc.), which
+    /// continues to drive Wallet and other structured features.
+    var visualCategory: String? = nil
+    /// Lets the classifier improve its category mapping without permanently
+    /// leaving older captures in a stale album.
+    var visualCategoryVersion: Int? = nil
+    /// Which classifier decided `visualCategory` — the MobileCLIP model's id, or
+    /// the Vision fallback. Cove ships with both, and a capture sorted by the
+    /// weaker one has to be findable later so it can be re-sorted by the better
+    /// one. A version number alone can't express that: the two classifiers are
+    /// different kinds of answer, not successive versions of the same one.
+    var visualClassifier: String? = nil
 
     // Receipt
     var merchant: String?

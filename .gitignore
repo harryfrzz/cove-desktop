@@ -18,3 +18,6 @@ Package.resolved
 
 # Local signing identity (see Config/Signing.xcconfig)
 Config/Signing.local.xcconfig
+
+# MobileCLIP Core ML weights (~200 MB). Fetched by Tools/fetch-models.sh.
+cove/Resources/Models/

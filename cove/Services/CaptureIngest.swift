@@ -85,12 +85,21 @@ enum CaptureIngest {
 
     /// Sandbox-friendly import: the panel is what grants Cove read access, and
     /// the bytes are copied in before that access lapses.
-    static func importFromOpenPanel(into context: ModelContext) {
+    ///
+    /// `contentTypes` narrows what the panel will offer — the Add menu uses it
+    /// to separate "an image" from "a file". Left nil, anything goes.
+    static func importFromOpenPanel(
+        into context: ModelContext,
+        contentTypes: [UTType]? = nil
+    ) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.title = "Add to Cove"
         panel.prompt = "Add"
+        if let contentTypes {
+            panel.allowedContentTypes = contentTypes
+        }
 
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {

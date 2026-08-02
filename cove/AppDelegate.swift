@@ -12,6 +12,7 @@ import WidgetKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: NotchController?
     private var statusItem: NSStatusItem?
+    private var linkPreviewsItem: NSMenuItem?
     private let windowController = CoveWindowController()
     /// The stamps already acted on, so a widget's note is honoured once and not
     /// re-run on every unrelated activation.
@@ -21,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // Before any window is built, so the first frame is already in the
+        // chosen appearance rather than flashing the system one.
+        CoveAppearanceStore.shared.apply()
 
         controller = NotchController()
         buildStatusItem()
@@ -32,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--open-island") {
             controller?.model.holdsOpen = true
             controller?.open()
+        }
+        if ProcessInfo.processInfo.arguments.contains("--open-window") {
+            windowController.show()
         }
 #endif
 
@@ -154,6 +161,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         ).target = self
         menu.addItem(.separator())
+
+        // The one thing Cove does that leaves the Mac, so it gets a switch.
+        // Off, saved links keep the covers they already have and new ones get a
+        // drawn card instead.
+        let previews = menu.addItem(
+            withTitle: "Fetch Link Previews",
+            action: #selector(toggleLinkPreviews),
+            keyEquivalent: ""
+        )
+        previews.target = self
+        previews.state = LinkPreviewService.isEnabled ? .on : .off
+        linkPreviewsItem = previews
+
+        menu.addItem(.separator())
         menu.addItem(
             withTitle: "Quit Cove",
             action: #selector(NSApplication.terminate(_:)),
@@ -172,11 +193,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller?.open()
     }
 
+    @objc private func toggleLinkPreviews() {
+        let enabled = !LinkPreviewService.isEnabled
+        LinkPreviewService.setEnabled(enabled)
+        linkPreviewsItem?.state = enabled ? .on : .off
+    }
+
     @objc private func pasteIntoCove() {
         guard let item = CaptureIngest.itemFromClipboard() else {
-            NotchActivityCenter.shared.post("Nothing Cove can hold on the clipboard")
+            NotchActivityCenter.shared.post(.nothingToSave)
             return
         }
         CaptureIngest.insert(item, into: CoveStore.shared.mainContext)
+        NotchActivityCenter.shared.post(.saved(count: 1))
     }
 }

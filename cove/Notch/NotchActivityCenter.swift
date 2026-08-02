@@ -1,6 +1,35 @@
 import Foundation
 import Observation
 
+/// A moment's confirmation, sized for the notch.
+///
+/// The island has only the sliver either side of the camera housing to speak in,
+/// and a sentence does not fit there — "3 items added" arrived clipped, which
+/// reads as a bug rather than as a message. So a toast is a glyph and one word:
+/// the glyph sits on one side of the notch and the word on the other, and the
+/// count rides on the glyph when there is more than one.
+struct NotchToast: Equatable, Sendable {
+    var text: String
+    var systemImage: String
+    var isFailure = false
+    /// Shown on the badge when a single drop carried several things.
+    var count: Int?
+
+    static func saved(count: Int) -> NotchToast {
+        NotchToast(text: "Added", systemImage: "checkmark.circle.fill", count: count > 1 ? count : nil)
+    }
+
+    static func held(count: Int) -> NotchToast {
+        NotchToast(text: "Held", systemImage: "tray.fill", count: count > 1 ? count : nil)
+    }
+
+    static let nothingToSave = NotchToast(
+        text: "Can't save",
+        systemImage: "xmark.circle.fill",
+        isFailure: true
+    )
+}
+
 /// What the island shows when it is *not* open: the pipeline's current state,
 /// as one line of status either side of the notch.
 ///
@@ -18,9 +47,8 @@ final class NotchActivityCenter {
     /// The last thing that finished, held briefly so a capture that takes 200 ms
     /// still shows the user it landed.
     private(set) var recentlyFinished: ShelfActivitySnapshot?
-    /// A one-off line the island shows for a moment — "3 items added",
-    /// "Nothing Cove can hold on the clipboard".
-    private(set) var toast: String?
+    /// A one-off word the island shows for a moment — "Added", "Held".
+    private(set) var toast: NotchToast?
 
     /// Set while a drag is over the island, so the closed state can open into a
     /// drop target before the mouse gets there.
@@ -65,7 +93,7 @@ final class NotchActivityCenter {
         announce()
     }
 
-    func post(_ message: String) {
+    func post(_ message: NotchToast) {
         toast = message
         announce()
         toastTask?.cancel()
