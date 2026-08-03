@@ -384,9 +384,17 @@ private struct PassCard: View {
     let snapshot: CaptureSnapshot
     var headlineSize: CGFloat = 22
     var stubHeight: CGFloat = 30
+    /// Matched to the widget's own corner when the pass fills the tile, and
+    /// kept tighter when it is one card sitting on a rack.
+    var cornerRadius: CGFloat = 16
+    /// Extra room for a pass printed edge to edge — without it the type sits
+    /// against the rounded corner the system clips to.
+    var inset: CGFloat = 0
 
     private var stock: Stock { Stock(snapshot.kind) }
-    private var shape: TicketShape { TicketShape(stubHeight: stubHeight) }
+    private var shape: TicketShape {
+        TicketShape(cornerRadius: cornerRadius, stubHeight: stubHeight)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -487,8 +495,8 @@ private struct PassCard: View {
             }
             .padding(.top, 7)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 12 + inset)
+        .padding(.vertical, 11 + inset)
     }
 
     private var perforation: some View {
@@ -663,6 +671,24 @@ private struct PassButton<Content: View>: View {
 
 // MARK: - Sizes
 
+/// Sizing shared by the three families.
+///
+/// The widget turns WidgetKit's default content margins off, so a pass can be
+/// the tile rather than a card floating in the middle of one — the margins were
+/// what put a band of canvas around the blue on every side. Everything that
+/// still wants breathing room asks for it here instead.
+private enum Layout {
+    /// Close to the corner macOS rounds a widget to. A pass printed edge to
+    /// edge has to match it, or the canvas shows through at the corners.
+    static let tileCorner: CGFloat = 22
+    /// Padding put back for the large rack, which has a masthead and a footer
+    /// that would otherwise sit against the edge.
+    static let rackPadding: CGFloat = 14
+    /// Breathing room inside a pass that has no margin outside it.
+    static let bleedInset: CGFloat = 3
+    static let passGap: CGFloat = 9
+}
+
 struct CoveWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: CoveEntry
@@ -682,9 +708,17 @@ private struct SmallView: View {
 
     var body: some View {
         if let first = entry.items.first {
-            PassButton(itemID: first.id) { PassCard(snapshot: first, headlineSize: 21, stubHeight: 29) }
+            PassButton(itemID: first.id) {
+                PassCard(
+                    snapshot: first,
+                    headlineSize: 21,
+                    stubHeight: 30,
+                    cornerRadius: Layout.tileCorner,
+                    inset: Layout.bleedInset
+                )
+            }
         } else {
-            EmptyRack()
+            EmptyRack().padding(Layout.rackPadding)
         }
     }
 }
@@ -695,11 +729,19 @@ private struct MediumView: View {
 
     var body: some View {
         if entry.items.isEmpty {
-            EmptyRack()
+            EmptyRack().padding(Layout.rackPadding)
         } else {
-            HStack(spacing: 10) {
+            HStack(spacing: Layout.passGap) {
                 ForEach(entry.items.prefix(2)) { item in
-                    PassButton(itemID: item.id) { PassCard(snapshot: item, headlineSize: 19, stubHeight: 29) }
+                    PassButton(itemID: item.id) {
+                        PassCard(
+                            snapshot: item,
+                            headlineSize: 19,
+                            stubHeight: 30,
+                            cornerRadius: Layout.tileCorner,
+                            inset: Layout.bleedInset
+                        )
+                    }
                 }
             }
         }
@@ -724,8 +766,8 @@ private struct LargeView: View {
                 EmptyRack()
             } else {
                 LazyVGrid(
-                    columns: [GridItem(spacing: 9), GridItem(spacing: 9)],
-                    spacing: 9
+                    columns: [GridItem(spacing: Layout.passGap), GridItem(spacing: Layout.passGap)],
+                    spacing: Layout.passGap
                 ) {
                     ForEach(entry.items.prefix(4)) { item in
                         PassButton(itemID: item.id) {
@@ -739,6 +781,9 @@ private struct LargeView: View {
                 RackFooter(entry: entry)
             }
         }
+        // The rack keeps its margin: unlike small and medium, this size is a
+        // board with chrome on it rather than one pass filling the tile.
+        .padding(Layout.rackPadding)
     }
 }
 
@@ -753,6 +798,10 @@ struct CoveWidget: Widget {
         .configurationDisplayName("Cove")
         .description("Your most recent captures, and a button to paste one more.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        // A pass is the tile, not a card inside one. WidgetKit's default
+        // margins put a band of canvas around every edge of the stock, which
+        // read as the ticket having been dropped into a black box.
+        .contentMarginsDisabled()
     }
 }
 
