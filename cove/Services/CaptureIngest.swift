@@ -21,7 +21,23 @@ enum CaptureIngest {
     /// Pasteboard types Cove accepts. Registered by the island's container
     /// view, which is what a drag actually lands on.
     static let acceptedPasteboardTypes: [NSPasteboard.PasteboardType] = [
-        .fileURL, .URL, .tiff, .png, .string, .rtf
+        .fileURL, .URL, .tiff, .png, .string, .rtf, .html
+    ] + browserTypes
+
+    /// The flavours a browser puts on the pasteboard when a tab is dragged.
+    ///
+    /// A tab drag is not an ordinary URL drag. Safari carries its own legacy
+    /// types alongside `public.url`, and if the destination declines the drag
+    /// the browser falls back to its own behaviour — tearing the tab off into a
+    /// new window, which is exactly what dropping one on the notch used to do.
+    /// Declaring these is what makes Cove a destination it will hand the tab to
+    /// instead.
+    static let browserTypes: [NSPasteboard.PasteboardType] = [
+        .init("Apple URL pasteboard type"),
+        .init("public.url-name"),
+        .init("WebURLsWithTitlesPboardType"),
+        .init("CorePasteboardFlavorType 0x75726C20"), // 'url '
+        .init("CorePasteboardFlavorType 0x75726C6E")  // 'urln'
     ]
 
     // MARK: - Drops and the clipboard
@@ -45,7 +61,11 @@ enum CaptureIngest {
             return urls.compactMap { item(from: $0, sourceApp: sourceApp) }
         }
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
-            return urls.compactMap { item(from: $0, sourceApp: sourceApp) }
+            // A dragged tab carries its page title beside the URL. Worth
+            // taking: the alternative is the last path component, which for
+            // most pages is a slug or nothing at all.
+            let name = pageTitle(on: pasteboard)
+            return urls.compactMap { item(from: $0, sourceApp: sourceApp, pageTitle: name) }
         }
         if let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage],
            !images.isEmpty {
@@ -111,13 +131,29 @@ enum CaptureIngest {
 
     // MARK: - Builders
 
-    static func item(from url: URL, sourceApp: String?) -> ShelfItem? {
+    /// The page title a browser writes alongside a dragged tab's URL.
+    static func pageTitle(on pasteboard: NSPasteboard) -> String? {
+        let candidates: [NSPasteboard.PasteboardType] = [
+            .init("public.url-name"),
+            .init("CorePasteboardFlavorType 0x75726C6E")
+        ]
+        for type in candidates {
+            guard let name = pasteboard.string(forType: type)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else { continue }
+            return name
+        }
+        return nil
+    }
+
+    static func item(from url: URL, sourceApp: String?, pageTitle: String? = nil) -> ShelfItem? {
         guard url.isFileURL else {
+            let name = pageTitle ?? (url.lastPathComponent.isEmpty ? nil : url.lastPathComponent)
             return ShelfItem(
                 kind: .link,
-                title: url.host() ?? url.absoluteString,
+                title: pageTitle ?? url.host() ?? url.absoluteString,
                 linkURL: url,
-                linkTitle: url.lastPathComponent.isEmpty ? nil : url.lastPathComponent,
+                linkTitle: name,
                 linkHost: url.host(),
                 sourceIdentifier: url.absoluteString,
                 sourceApp: sourceApp
