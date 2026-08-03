@@ -917,7 +917,8 @@ private struct TrayPage: View {
                 pasteboardItem: entry.pasteboardItem,
                 onAccepted: { tray.handOff(entry) },
                 onSave: { save(entry) },
-                onRemove: { tray.remove(entry) }
+                onRemove: { tray.remove(entry) },
+                onOpen: { entry.open() }
             )
         }
         .help(entry.name)
@@ -942,6 +943,7 @@ private struct TrayDragOut: NSViewRepresentable {
     let onAccepted: () -> Void
     let onSave: () -> Void
     let onRemove: () -> Void
+    let onOpen: () -> Void
 
     func makeNSView(context: Context) -> TrayDragOutView {
         let view = TrayDragOutView()
@@ -959,6 +961,7 @@ private struct TrayDragOut: NSViewRepresentable {
         view.onAccepted = onAccepted
         view.onSave = onSave
         view.onRemove = onRemove
+        view.onOpen = onOpen
     }
 }
 
@@ -968,23 +971,37 @@ final class TrayDragOutView: NSView, NSDraggingSource {
     var onAccepted: (() -> Void)?
     var onSave: (() -> Void)?
     var onRemove: (() -> Void)?
+    var onOpen: (() -> Void)?
 
     /// The island is a non-activating panel and is usually not the key window.
     /// Without this the first press only brings it forward and the drag it was
     /// meant to start never happens.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// Claims the press so the drag below it is delivered here. Deliberately
-    /// does nothing else: a click on a held thing is not an action, only the
-    /// beginning of a possible drag.
-    override func mouseDown(with event: NSEvent) {}
+    /// Whether the press that is still down has turned into a drag.
+    ///
+    /// A press on a held thing is ambiguous until it ends: moved, it is the
+    /// start of a drag; released where it began, it is a click asking to open
+    /// the thing. So the press is claimed here, the decision is deferred, and
+    /// `mouseUp` acts only if nothing dragged.
+    private var isDragging = false
+
+    override func mouseDown(with event: NSEvent) {
+        isDragging = false
+    }
 
     override func mouseDragged(with event: NSEvent) {
         guard let pasteboardItem, let image else { return }
+        isDragging = true
 
         let item = NSDraggingItem(pasteboardWriter: pasteboardItem())
         item.setDraggingFrame(bounds, contents: image)
         beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard !isDragging else { return }
+        onOpen?()
     }
 
     /// Right-click is handled here rather than by a SwiftUI `contextMenu`: this
@@ -992,8 +1009,14 @@ final class TrayDragOutView: NSView, NSDraggingSource {
     /// reached.
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
-        // Keeping it comes first: it is the one of the two that cannot be
-        // undone by doing the other.
+        menu.addItem(
+            withTitle: "Open",
+            action: #selector(openEntry),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(.separator())
+        // Keeping it comes first of the remaining two: it is the one that
+        // cannot be undone by doing the other.
         menu.addItem(
             withTitle: "Add to Cove",
             action: #selector(saveEntry),
@@ -1006,6 +1029,10 @@ final class TrayDragOutView: NSView, NSDraggingSource {
             keyEquivalent: ""
         ).target = self
         return menu
+    }
+
+    @objc private func openEntry() {
+        onOpen?()
     }
 
     @objc private func saveEntry() {
