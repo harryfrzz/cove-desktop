@@ -57,6 +57,22 @@ final class TempTray {
                 nil
             }
         }
+
+        /// Opens the held thing where it belongs — a link in the browser, a
+        /// file in whatever owns it. Read off the pasteboard writer for the
+        /// same reason `shelfItem()` is: the writer is the payload, and a
+        /// second copy kept beside it is a second thing to get wrong.
+        ///
+        /// Text is deliberately not openable. There is nowhere for a held
+        /// sentence to go, and opening TextEdit on it would be inventing a
+        /// destination rather than honouring one.
+        @discardableResult
+        func open() -> Bool {
+            guard case let url as NSURL = pasteboardItem(), let url = url as URL? else {
+                return false
+            }
+            return NSWorkspace.shared.open(url)
+        }
     }
 
     private(set) var entries: [Entry] = []
