@@ -15,45 +15,69 @@ import WidgetKit
 // white type, four times over. The picture belongs in the app. What a pass
 // carries is a name, a time, and a colour you can recognise across the rack.
 //
-// The canvas stays plain so the passes sit in relief. The passes themselves do
-// not invert — they are artwork, printed white-on-colour in both schemes.
+// Neither the canvas nor the passes follow the system appearance. The passes
+// are artwork, printed white-on-colour; the rack behind them is dark so they
+// sit in relief — see `Cove.canvas`.
 
 private enum Cove {
-    static func canvas(_ s: ColorScheme) -> Color {
-        s == .dark ? Color(red: 0.09, green: 0.09, blue: 0.10) : .white
-    }
-
-    static func ink(_ s: ColorScheme) -> Color {
-        s == .dark ? Color(red: 0.95, green: 0.94, blue: 0.92)
-                   : Color(red: 0.11, green: 0.11, blue: 0.12)
-    }
-
-    static func inkSecondary(_ s: ColorScheme) -> Color { ink(s).opacity(0.5) }
-
-    static func chip(_ s: ColorScheme) -> Color {
-        s == .dark ? .white.opacity(0.09) : .black.opacity(0.045)
-    }
+    /// The rack is dark in both appearances, like the island is.
+    ///
+    /// It followed the system until the passes were printed edge to edge, and
+    /// then the canvas had nowhere left to hide: on medium it is only the seam
+    /// between two passes, and in the light appearance that seam was a white
+    /// stripe splitting the widget in half. Behind the large rack it washed the
+    /// stock out the same way.
+    ///
+    /// A pass is saturated artwork and reads best on something dark, which is
+    /// also the argument the island already makes. So the widget commits, and
+    /// what was a bright seam is now a shadowed gap between two tickets — which
+    /// is what the gap was always meant to look like.
+    static let canvas = Color(red: 0.09, green: 0.09, blue: 0.10)
+    static let ink = Color(red: 0.95, green: 0.94, blue: 0.92)
+    static let inkSecondary = ink.opacity(0.5)
+    static let chip = Color.white.opacity(0.09)
 }
 
-/// The stock a capture is printed on. Two hues carry the rack — ocean for
-/// things Cove saw, ember for things you wrote or linked — with a graphite for
-/// plain files. Three is enough to tell passes apart; five was a fruit salad.
+/// The stock a capture is printed on — one per kind, so a glance at the rack
+/// tells you what is on it before a word is read.
+///
+/// All five are pulled from the same coastline the app icon is: deep water
+/// through shallow, then the sand and the stone above it. That is what keeps
+/// five colours from being a fruit salad — they are a place, not a legend, and
+/// they sit together because they were sampled together.
+///
+/// Sorted by how far out to sea the thing came from, which is not a real
+/// ordering but is a consistent one: what Cove saw is water, what you wrote is
+/// shore.
 private enum Stock {
-    case ocean, ember, graphite
+    /// Screenshots — the deep blue the icon's horizon fades from.
+    case deepWater
+    /// Images — shallower, greener, still unmistakably sea.
+    case shallows
+    /// Links — the indigo where water meets dusk.
+    case tideline
+    /// Notes — the warm sand the icon's lower half is.
+    case shore
+    /// Files — the stone above the waterline, inert on purpose.
+    case stone
 
     init(_ kind: ShelfItemKind) {
         switch kind {
-        case .screenshot, .image: self = .ocean
-        case .link, .text: self = .ember
-        case .file: self = .graphite
+        case .screenshot: self = .deepWater
+        case .image: self = .shallows
+        case .link: self = .tideline
+        case .text: self = .shore
+        case .file: self = .stone
         }
     }
 
     var gradient: [Color] {
         switch self {
-        case .ocean: [Color(red: 0.24, green: 0.52, blue: 0.96), Color(red: 0.12, green: 0.33, blue: 0.84)]
-        case .ember: [Color(red: 0.95, green: 0.44, blue: 0.32), Color(red: 0.89, green: 0.36, blue: 0.24)]
-        case .graphite: [Color(red: 0.35, green: 0.40, blue: 0.48), Color(red: 0.19, green: 0.23, blue: 0.29)]
+        case .deepWater: [Color(red: 0.24, green: 0.52, blue: 0.96), Color(red: 0.12, green: 0.33, blue: 0.84)]
+        case .shallows: [Color(red: 0.11, green: 0.71, blue: 0.68), Color(red: 0.05, green: 0.47, blue: 0.49)]
+        case .tideline: [Color(red: 0.45, green: 0.42, blue: 0.93), Color(red: 0.29, green: 0.24, blue: 0.78)]
+        case .shore: [Color(red: 0.93, green: 0.53, blue: 0.31), Color(red: 0.82, green: 0.38, blue: 0.22)]
+        case .stone: [Color(red: 0.35, green: 0.40, blue: 0.48), Color(red: 0.19, green: 0.23, blue: 0.29)]
         }
     }
 
@@ -384,9 +408,17 @@ private struct PassCard: View {
     let snapshot: CaptureSnapshot
     var headlineSize: CGFloat = 22
     var stubHeight: CGFloat = 30
+    /// Matched to the widget's own corner when the pass fills the tile, and
+    /// kept tighter when it is one card sitting on a rack.
+    var cornerRadius: CGFloat = 16
+    /// Extra room for a pass printed edge to edge — without it the type sits
+    /// against the rounded corner the system clips to.
+    var inset: CGFloat = 0
 
     private var stock: Stock { Stock(snapshot.kind) }
-    private var shape: TicketShape { TicketShape(stubHeight: stubHeight) }
+    private var shape: TicketShape {
+        TicketShape(cornerRadius: cornerRadius, stubHeight: stubHeight)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -487,8 +519,8 @@ private struct PassCard: View {
             }
             .padding(.top, 7)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 12 + inset)
+        .padding(.vertical, 11 + inset)
     }
 
     private var perforation: some View {
@@ -528,7 +560,6 @@ private struct PassCard: View {
 /// The rack's masthead: the mark, the name, what is in it, and the one control.
 private struct Masthead: View {
     let entry: CoveEntry
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         HStack(spacing: 7) {
@@ -536,12 +567,12 @@ private struct Masthead: View {
                 HStack(spacing: 7) {
                     Text("C")
                         .font(.system(size: 12, weight: .bold, design: .serif))
-                        .foregroundStyle(Cove.canvas(scheme))
+                        .foregroundStyle(Cove.canvas)
                         .frame(width: 22, height: 22)
-                        .background(Cove.ink(scheme), in: Circle())
+                        .background(Cove.ink, in: Circle())
                     Text("Cove")
                         .font(.system(size: 15, weight: .semibold, design: .serif))
-                        .foregroundStyle(Cove.ink(scheme))
+                        .foregroundStyle(Cove.ink)
                 }
                 .contentShape(Rectangle())
             }
@@ -552,10 +583,10 @@ private struct Masthead: View {
             Text("\(entry.total) total".uppercased())
                 .font(.system(size: 7.5, weight: .bold, design: .monospaced))
                 .tracking(0.5)
-                .foregroundStyle(Cove.inkSecondary(scheme))
+                .foregroundStyle(Cove.inkSecondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
-                .background(Cove.chip(scheme), in: Capsule())
+                .background(Cove.chip, in: Capsule())
                 .lineLimit(1)
 
             // The utilities. Both do their real work in the app — the
@@ -580,15 +611,14 @@ private struct Utility<I: AppIntent>: View {
     let symbol: String
     let label: String
     let intent: I
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button(intent: intent) {
             Image(systemName: symbol)
                 .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Cove.canvas(scheme))
+                .foregroundStyle(Cove.canvas)
                 .frame(width: 22, height: 22)
-                .background(Cove.ink(scheme), in: Circle())
+                .background(Cove.ink, in: Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -598,7 +628,6 @@ private struct Utility<I: AppIntent>: View {
 /// The footer: which stocks are in the rack, and where they live.
 private struct RackFooter: View {
     let entry: CoveEntry
-    @Environment(\.colorScheme) private var scheme
 
     private var stocks: [Color] {
         var seen: [Color] = []
@@ -615,35 +644,34 @@ private struct RackFooter: View {
                 Circle()
                     .fill(colour)
                     .frame(width: 13, height: 13)
-                    .overlay(Circle().strokeBorder(Cove.canvas(scheme), lineWidth: 1.5))
+                    .overlay(Circle().strokeBorder(Cove.canvas, lineWidth: 1.5))
                     .offset(x: CGFloat(index) * -4)
             }
             Spacer(minLength: 0)
             Text("on device".uppercased())
                 .font(.system(size: 7.5, weight: .bold, design: .monospaced))
                 .tracking(0.6)
-                .foregroundStyle(Cove.inkSecondary(scheme))
+                .foregroundStyle(Cove.inkSecondary)
             Image(systemName: "lock.fill")
                 .font(.system(size: 7.5, weight: .bold))
-                .foregroundStyle(Cove.inkSecondary(scheme))
+                .foregroundStyle(Cove.inkSecondary)
                 .padding(.leading, 4)
         }
     }
 }
 
 private struct EmptyRack: View {
-    @Environment(\.colorScheme) private var scheme
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "tray")
                 .font(.system(size: 18, weight: .light))
-                .foregroundStyle(Cove.inkSecondary(scheme))
+                .foregroundStyle(Cove.inkSecondary)
             Text("drop something\ninto the notch".uppercased())
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .tracking(0.5)
                 .lineSpacing(3)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Cove.inkSecondary(scheme))
+                .foregroundStyle(Cove.inkSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -662,6 +690,24 @@ private struct PassButton<Content: View>: View {
 }
 
 // MARK: - Sizes
+
+/// Sizing shared by the three families.
+///
+/// The widget turns WidgetKit's default content margins off, so a pass can be
+/// the tile rather than a card floating in the middle of one — the margins were
+/// what put a band of canvas around the blue on every side. Everything that
+/// still wants breathing room asks for it here instead.
+private enum Layout {
+    /// Close to the corner macOS rounds a widget to. A pass printed edge to
+    /// edge has to match it, or the canvas shows through at the corners.
+    static let tileCorner: CGFloat = 22
+    /// Padding put back for the large rack, which has a masthead and a footer
+    /// that would otherwise sit against the edge.
+    static let rackPadding: CGFloat = 14
+    /// Breathing room inside a pass that has no margin outside it.
+    static let bleedInset: CGFloat = 3
+    static let passGap: CGFloat = 9
+}
 
 struct CoveWidgetView: View {
     @Environment(\.widgetFamily) private var family
@@ -682,9 +728,17 @@ private struct SmallView: View {
 
     var body: some View {
         if let first = entry.items.first {
-            PassButton(itemID: first.id) { PassCard(snapshot: first, headlineSize: 21, stubHeight: 29) }
+            PassButton(itemID: first.id) {
+                PassCard(
+                    snapshot: first,
+                    headlineSize: 21,
+                    stubHeight: 30,
+                    cornerRadius: Layout.tileCorner,
+                    inset: Layout.bleedInset
+                )
+            }
         } else {
-            EmptyRack()
+            EmptyRack().padding(Layout.rackPadding)
         }
     }
 }
@@ -695,11 +749,19 @@ private struct MediumView: View {
 
     var body: some View {
         if entry.items.isEmpty {
-            EmptyRack()
+            EmptyRack().padding(Layout.rackPadding)
         } else {
-            HStack(spacing: 10) {
+            HStack(spacing: Layout.passGap) {
                 ForEach(entry.items.prefix(2)) { item in
-                    PassButton(itemID: item.id) { PassCard(snapshot: item, headlineSize: 19, stubHeight: 29) }
+                    PassButton(itemID: item.id) {
+                        PassCard(
+                            snapshot: item,
+                            headlineSize: 19,
+                            stubHeight: 30,
+                            cornerRadius: Layout.tileCorner,
+                            inset: Layout.bleedInset
+                        )
+                    }
                 }
             }
         }
@@ -724,8 +786,8 @@ private struct LargeView: View {
                 EmptyRack()
             } else {
                 LazyVGrid(
-                    columns: [GridItem(spacing: 9), GridItem(spacing: 9)],
-                    spacing: 9
+                    columns: [GridItem(spacing: Layout.passGap), GridItem(spacing: Layout.passGap)],
+                    spacing: Layout.passGap
                 ) {
                     ForEach(entry.items.prefix(4)) { item in
                         PassButton(itemID: item.id) {
@@ -739,6 +801,9 @@ private struct LargeView: View {
                 RackFooter(entry: entry)
             }
         }
+        // The rack keeps its margin: unlike small and medium, this size is a
+        // board with chrome on it rather than one pass filling the tile.
+        .padding(Layout.rackPadding)
     }
 }
 
@@ -753,11 +818,14 @@ struct CoveWidget: Widget {
         .configurationDisplayName("Cove")
         .description("Your most recent captures, and a button to paste one more.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        // A pass is the tile, not a card inside one. WidgetKit's default
+        // margins put a band of canvas around every edge of the stock, which
+        // read as the ticket having been dropped into a black box.
+        .contentMarginsDisabled()
     }
 }
 
 /// Plain by design, so the passes sit in relief instead of over a wash.
 private struct RackCanvas: View {
-    @Environment(\.colorScheme) private var scheme
-    var body: some View { Cove.canvas(scheme) }
+    var body: some View { Cove.canvas }
 }
