@@ -31,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observeWidgetIntents()
 
 #if DEBUG
+        registerWidgetForDevelopment()
+
         // Lets a screenshot run catch the open state; hovering the notch is
         // otherwise the only way in, and that cannot be scripted.
         if ProcessInfo.processInfo.arguments.contains("--open-island") {
@@ -50,6 +52,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+#if DEBUG
+    /// Re-registers the widget with macOS on every development launch.
+    ///
+    /// macOS forgets a widget extension whenever the app bundle it lives in is
+    /// replaced, which every rebuild does. After that `chronod` logs "Ignoring
+    /// restricted or unknown extension" and Cove is simply absent from Edit
+    /// Widgets — nothing is wrong with the code, the system has lost track of
+    /// the extension. Running from DerivedData makes it certain.
+    ///
+    /// Done here rather than in a build phase because build phases run before
+    /// the bundle is signed, and registering an unsigned copy does not survive
+    /// the signing that follows. By the time this runs the app is signed,
+    /// installed where it is going to run from, and launched.
+    ///
+    /// Debug only. A release build is installed once, in a stable place, and
+    /// registers itself the ordinary way.
+    private func registerWidgetForDevelopment() {
+        let appex = Bundle.main.bundleURL
+            .appending(path: "Contents/PlugIns/CoveWidgetExtension.appex")
+        guard FileManager.default.fileExists(atPath: appex.path) else { return }
+
+        Task.detached(priority: .background) {
+            func pluginkit(_ arguments: [String]) {
+                let process = Process()
+                process.executableURL = URL(filePath: "/usr/bin/pluginkit")
+                process.arguments = arguments
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                try? process.run()
+                process.waitUntilExit()
+            }
+            pluginkit(["-a", appex.path])
+            pluginkit(["-e", "use", "-i", "com.loop.cove.CoveWidget"])
+        }
+    }
+#endif
 
     /// Listens for the widget's buttons.
     ///
