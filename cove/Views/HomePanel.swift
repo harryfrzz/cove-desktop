@@ -525,7 +525,10 @@ private struct ChatHistoryPage: View {
 
         return Text(turn.text)
             .font(.system(size: 10))
-            .foregroundStyle(isUser ? CoveTheme.surface : CoveTheme.ink)
+            // The user's bubble is filled with the accent, so its text is
+            // whatever reads on the accent the user picked — not always the
+            // cream the rest of the transcript uses.
+            .foregroundStyle(isUser ? CoveTheme.onAccent : CoveTheme.ink)
             .multilineTextAlignment(.leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 9)

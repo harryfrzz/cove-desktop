@@ -14,9 +14,21 @@ struct NotchToast: Equatable, Sendable {
     var isFailure = false
     /// Shown on the badge when a single drop carried several things.
     var count: Int?
+    /// Whether this word is about something the pipeline is still working on,
+    /// and so should wait its turn behind the band.
+    ///
+    /// Only a saved capture is: holding a file and failing to read one are both
+    /// finished the moment they are announced, and a confirmation that arrived
+    /// late for those would just read as lag.
+    var awaitsProcessing = false
 
     static func saved(count: Int) -> NotchToast {
-        NotchToast(text: "Added", systemImage: "checkmark.circle.fill", count: count > 1 ? count : nil)
+        NotchToast(
+            text: "Added",
+            systemImage: "checkmark.circle.fill",
+            count: count > 1 ? count : nil,
+            awaitsProcessing: true
+        )
     }
 
     static func held(count: Int) -> NotchToast {
@@ -50,6 +62,14 @@ final class NotchActivityCenter {
     /// A one-off word the island shows for a moment — "Added", "Held".
     private(set) var toast: NotchToast?
 
+    /// A word that has been said but is waiting for the band to finish.
+    ///
+    /// Counted as activity even though nothing shows it yet. Without this the
+    /// island has a gap between the drop and the pipeline's first phase where it
+    /// has nothing to say, falls back into the notch, and immediately grows
+    /// again — a flinch on every capture.
+    private var pendingToast: NotchToast?
+
     /// Set while a drag is over the island, so the closed state can open into a
     /// drop target before the mouse gets there.
     var isDropTargeted = false {
@@ -62,6 +82,25 @@ final class NotchActivityCenter {
 
     private var clearTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
+    private var holdTask: Task<Void, Never>?
+
+    /// When the current run of work began, or `nil` if nothing is running.
+    ///
+    /// Exists so the band is allowed to finish crossing. Without embeddings
+    /// installed a capture is queued, read and done inside a few hundred
+    /// milliseconds — faster than one pass of the shimmer — so the status it
+    /// belongs to appeared and vanished between two frames and the island simply
+    /// never looked busy. This is what a sweep is measured against.
+    private var workingSince: Date?
+
+    /// Whether work — or the tail of the band drawn for it — is still running.
+    var isBandRunning: Bool { workingSince != nil }
+
+    /// How much of one sweep is left to draw. Zero when nothing is running.
+    private var remainingBandTime: TimeInterval {
+        guard let workingSince else { return 0 }
+        return max(0, CoveShimmer.period - Date.now.timeIntervalSince(workingSince))
+    }
 
     private init() {}
 
@@ -76,6 +115,7 @@ final class NotchActivityCenter {
         !inFlight.isEmpty
             || recentlyFinished != nil
             || toast != nil
+            || pendingToast != nil
             || isDropTargeted
             || !TempTray.shared.isEmpty
     }
@@ -99,24 +139,93 @@ final class NotchActivityCenter {
     func update(_ snapshot: ShelfActivitySnapshot) {
         switch snapshot.phase {
         case .done, .failed:
-            inFlight.removeAll { $0.id == snapshot.id }
-            recentlyFinished = snapshot
-            scheduleClear()
+            // Work that outran the band is held at its last live phase until the
+            // sweep has crossed once. The status stays honest — something did
+            // happen, and this is the phase it was in — it is only allowed to
+            // be seen.
+            let remaining = remainingBandTime
+            guard remaining <= 0 else {
+                holdTask?.cancel()
+                holdTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(remaining))
+                    guard !Task.isCancelled else { return }
+                    self?.settle(snapshot)
+                }
+                return
+            }
+            settle(snapshot)
+
         default:
+            if workingSince == nil { workingSince = .now }
             if let index = inFlight.firstIndex(where: { $0.id == snapshot.id }) {
                 inFlight[index] = snapshot
             } else {
                 inFlight.append(snapshot)
             }
             clearTask?.cancel()
+            announce()
         }
+    }
+
+    /// Applies a finished snapshot, once it is allowed to land.
+    private func settle(_ snapshot: ShelfActivitySnapshot) {
+        inFlight.removeAll { $0.id == snapshot.id }
+        recentlyFinished = snapshot
+        if inFlight.isEmpty { workingSince = nil }
+        scheduleClear()
         announce()
     }
 
+    /// Says a word, once the band has had its pass.
+    ///
+    /// A toast hides the status it would otherwise be shimmering over — the
+    /// strip has one line and the word takes it — so a confirmation posted the
+    /// instant a file is dropped silences the band for its whole 2.4 seconds,
+    /// which is longer than the work takes. Letting it wait costs about a
+    /// second and is the difference between an island that looks like it did
+    /// something and one that blinks.
+    ///
+    /// Capped, because a stuck pipeline must not be able to swallow the
+    /// confirmation entirely.
     func post(_ message: NotchToast) {
+        toastTask?.cancel()
+        pendingToast = message
+        announce()
+
+        toastTask = Task { [weak self] in
+            if message.awaitsProcessing {
+                await self?.waitForBand()
+                guard !Task.isCancelled else { return }
+            }
+            self?.show(message)
+        }
+    }
+
+    /// Waits for work to appear and then to finish.
+    ///
+    /// The grace at the top is not optional. `CaptureIngest.insert` hands the
+    /// item to the processor in a detached task, so this is always called
+    /// *before* the pipeline has announced anything — without a moment to let
+    /// the first phase arrive, there is never any band to wait for.
+    private func waitForBand(
+        grace: Duration = .milliseconds(300),
+        cap: Duration = .seconds(4)
+    ) async {
+        let deadline = ContinuousClock.now.advanced(by: cap)
+
+        try? await Task.sleep(for: grace)
+        guard !Task.isCancelled else { return }
+
+        while isBandRunning, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+        }
+    }
+
+    private func show(_ message: NotchToast) {
+        pendingToast = nil
         toast = message
         announce()
-        toastTask?.cancel()
         toastTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2.4))
             guard !Task.isCancelled else { return }

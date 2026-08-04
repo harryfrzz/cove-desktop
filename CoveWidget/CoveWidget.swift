@@ -32,24 +32,74 @@ private enum Cove {
     /// also the argument the island already makes. So the widget commits, and
     /// what was a bright seam is now a shadowed gap between two tickets — which
     /// is what the gap was always meant to look like.
-    static let canvas = Color(red: 0.09, green: 0.09, blue: 0.10)
-    static let ink = Color(red: 0.95, green: 0.94, blue: 0.92)
+    /// `CoveTheme.surface` exactly — the pure black the island is. It was a very
+    /// dark grey, which was a third surface nothing else in Cove had, and on the
+    /// large rack it is the only place the canvas shows.
+    static let canvas = Color.black
+    /// `CoveTheme.ink` exactly — the app's warm cream rather than the neutral
+    /// off-white this was. A hundredth of a point of blue is all that separated
+    /// them, and it was enough to make the widget read cool beside an island
+    /// that reads warm.
+    static let ink = Color(red: 0.96, green: 0.94, blue: 0.90)
     static let inkSecondary = ink.opacity(0.5)
     static let chip = Color.white.opacity(0.09)
 }
 
-/// The stock a capture is printed on — one per kind, so a glance at the rack
-/// tells you what is on it before a word is read.
+/// The stock every capture is printed on. One colour, not five.
 ///
-/// All five are pulled from the same coastline the app icon is: deep water
-/// through shallow, then the sand and the stone above it. That is what keeps
-/// five colours from being a fruit salad — they are a place, not a legend, and
-/// they sit together because they were sampled together.
+/// Five saturated stocks were a legend that had to be learned before it paid
+/// anything back, and the price was paid on every card at once: four passes on
+/// the large rack meant four competing fields of colour, and on a desktop whose
+/// own furniture is neutral glass over a wallpaper, that read as a widget from
+/// another operating system.
 ///
-/// Sorted by how far out to sea the thing came from, which is not a real
-/// ordering but is a consistent one: what Cove saw is water, what you wrote is
-/// shore.
-private enum Stock {
+/// So the stock is graphite and the kind is a mark on it — see `KindTint`. The
+/// colour is still there and still means the same thing; it is a dot rather
+/// than the whole card, which is the size the information was always worth.
+///
+/// The stock a capture is printed on: the accent the user chose, which is the
+/// same colour the island's controls are.
+///
+/// Nothing here is a constant any more, and that is the whole feature. What it
+/// costs is that the card's *ink* is not a constant either — Deep Water and
+/// Sahara are not the same kind of colour to print on, and a face hardcoded in
+/// white is legible on one and unreadable on the other. Everything drawn on a
+/// pass therefore asks `\.coveAccent` what colour it is rather than assuming.
+private extension CoveAccent {
+    /// What may be printed on this stock.
+    var ink: Color {
+        prefersDarkInk ? Color(red: 0.11, green: 0.10, blue: 0.09) : Cove.ink
+    }
+
+    /// The same ink at the weight the card's quieter marks want. A single
+    /// helper because there are eight of them and they were eight separate
+    /// `.white.opacity(_:)` calls that all had to change together.
+    func ink(_ opacity: Double) -> Color { ink.opacity(opacity) }
+}
+
+private struct CoveAccentKey: EnvironmentKey {
+    static let defaultValue = CoveAccent.deepWater
+}
+
+private extension EnvironmentValues {
+    var coveAccent: CoveAccent {
+        get { self[CoveAccentKey.self] }
+        set { self[CoveAccentKey.self] = newValue }
+    }
+}
+
+/// The one mark a pass carries, keyed to what the capture is.
+///
+/// The coastline the app icon is sampled from — deep water through shallow,
+/// then the sand and the stone above it — ordered by how far out to sea the
+/// thing came from: what Cove saw is water, what you wrote is shore.
+///
+/// Every one is a pale tint rather than a saturated one, because these are
+/// printed *on* the stock rather than being it. Two rules came out of that and
+/// both are load-bearing: nothing here may be violet, or it vanishes into the
+/// card; and the commonest kind takes the ink, because a shelf is mostly
+/// screenshots and the mark you see most should be the quietest one.
+private enum KindTint {
     /// Screenshots — the deep blue the icon's horizon fades from.
     case deepWater
     /// Images — shallower, greener, still unmistakably sea.
@@ -71,17 +121,46 @@ private enum Stock {
         }
     }
 
-    var gradient: [Color] {
+    /// The mark's colour on a given stock.
+    ///
+    /// Two sets, because the card is now whichever of six colours the user
+    /// picked and they are not all the same kind of surface. Pale marks read on
+    /// Deep Water and disappear on Champagne; deep ones do the reverse. Which
+    /// set applies is the same question the card's ink already answers, so it is
+    /// asked once, of the accent, rather than guessed here.
+    func color(on accent: CoveAccent) -> Color {
+        // A screenshot is the commonest thing on a shelf, so its mark is simply
+        // the ink — the default kind rather than a missing one. It is also the
+        // only one that needs no second version.
+        guard self != .deepWater else { return accent.ink }
+        return accent.prefersDarkInk ? onLightStock : onDarkStock
+    }
+
+    private var onDarkStock: Color {
         switch self {
-        case .deepWater: [Color(red: 0.24, green: 0.52, blue: 0.96), Color(red: 0.12, green: 0.33, blue: 0.84)]
-        case .shallows: [Color(red: 0.11, green: 0.71, blue: 0.68), Color(red: 0.05, green: 0.47, blue: 0.49)]
-        case .tideline: [Color(red: 0.45, green: 0.42, blue: 0.93), Color(red: 0.29, green: 0.24, blue: 0.78)]
-        case .shore: [Color(red: 0.93, green: 0.53, blue: 0.31), Color(red: 0.82, green: 0.38, blue: 0.22)]
-        case .stone: [Color(red: 0.35, green: 0.40, blue: 0.48), Color(red: 0.19, green: 0.23, blue: 0.29)]
+        case .deepWater: Color(red: 0.96, green: 0.94, blue: 0.90)
+        case .shallows: Color(red: 0.55, green: 0.91, blue: 0.87)
+        // The dusk rather than the indigo under it. The lavender this was is
+        // the one hue a violet card leaves nowhere to stand, so the tideline is
+        // read at the moment the sky over it goes pink instead.
+        case .tideline: Color(red: 0.98, green: 0.68, blue: 0.82)
+        case .shore: Color(red: 1.00, green: 0.79, blue: 0.56)
+        // Neutral rather than the cool grey it was, which read as a weaker
+        // version of `shallows`.
+        case .stone: Color(red: 0.86, green: 0.86, blue: 0.87)
         }
     }
 
-    var chipColor: Color { gradient[0] }
+    /// The same coastline at depth, for the warm and light stocks.
+    private var onLightStock: Color {
+        switch self {
+        case .deepWater: Color(red: 0.11, green: 0.10, blue: 0.09)
+        case .shallows: Color(red: 0.04, green: 0.40, blue: 0.42)
+        case .tideline: Color(red: 0.60, green: 0.15, blue: 0.36)
+        case .shore: Color(red: 0.62, green: 0.29, blue: 0.08)
+        case .stone: Color(red: 0.22, green: 0.25, blue: 0.30)
+        }
+    }
 }
 
 // MARK: - What a pass says
@@ -257,8 +336,12 @@ private struct TicketShape: Shape {
 /// The halftone field printed across the shoulder of the stock. Drawn rather
 /// than tiled so it stays crisp at any card size.
 private struct DotField: View {
+    @Environment(\.coveAccent) private var accent
+
     var body: some View {
-        Canvas { context, size in
+        let dots = accent.ink(0.34)
+
+        return Canvas { context, size in
             let spacing: CGFloat = 7
             let dot = CGSize(width: 1.2, height: 1.2)
             var y: CGFloat = 0
@@ -267,7 +350,7 @@ private struct DotField: View {
                 while x < size.width {
                     context.fill(
                         Path(ellipseIn: CGRect(origin: CGPoint(x: x, y: y), size: dot)),
-                        with: .color(.white.opacity(0.34))
+                        with: .color(dots)
                     )
                     x += spacing
                 }
@@ -295,10 +378,16 @@ private struct PassShadow: ViewModifier {
 /// The lit edge of a raised card: bright along the top where the light lands,
 /// fading to almost nothing underneath. A single flat stroke draws a box around
 /// the card; this one gives it a thickness.
+///
+/// A `ShapeStyle` rather than a view because `resolve(in:)` hands it the
+/// environment, which is how it reads the accent without being passed one — the
+/// lit edge of a dark card and of a light one are not the same colour.
 private struct Bevel: ShapeStyle {
     func resolve(in environment: EnvironmentValues) -> LinearGradient {
-        LinearGradient(
-            colors: [.white.opacity(0.55), .white.opacity(0.22), .white.opacity(0.08)],
+        let ink = environment.coveAccent.ink
+
+        return LinearGradient(
+            colors: [ink.opacity(0.55), ink.opacity(0.22), ink.opacity(0.08)],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -307,14 +396,20 @@ private struct Bevel: ShapeStyle {
 
 /// Monospaced micro-label — the caption stock every pass is annotated in.
 private struct Micro: View {
+    @Environment(\.coveAccent) private var accent
+
     let text: String
     var size: CGFloat = 6.5
     var opacity: Double = 0.62
+
     var body: some View {
         Text(text.uppercased())
             .font(.system(size: size, weight: .bold, design: .monospaced))
             .tracking(0.7)
-            .foregroundStyle(.white.opacity(opacity))
+            // Always the card's ink: every one of these is printed on a pass.
+            // The rack's own chrome uses plain `Text` on `Cove.ink`, because it
+            // sits on the canvas and the accent has no say over it.
+            .foregroundStyle(accent.ink(opacity))
             .lineLimit(1)
     }
 }
@@ -323,6 +418,14 @@ private struct Micro: View {
 
 struct CoveEntry: TimelineEntry {
     let date: Date
+    /// Read when the timeline is built rather than when a view draws, so the
+    /// whole entry is printed on one stock. The app reloads timelines the moment
+    /// the choice changes — otherwise this would be up to an hour stale.
+    ///
+    /// Declared here, ahead of the contents, only so the memberwise initialiser
+    /// takes it in the order the call sites read best; it is defaulted, so
+    /// `placeholder` can still leave it out.
+    var accent: CoveAccent = .deepWater
     let items: [CaptureSnapshot]
     let total: Int
     let todayCount: Int
@@ -346,22 +449,31 @@ struct CaptureSnapshot: Identifiable {
 /// Reads the most-recent captures each time the timeline is rebuilt. The app
 /// nudges this with `WidgetCenter.reloadAllTimelines()` after a capture; the
 /// hourly refresh below is only a fallback for the day rolling over.
-struct CoveProvider: TimelineProvider {
+struct CoveProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> CoveEntry {
         CoveEntry(date: .now, items: [], total: 0, todayCount: 0)
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (CoveEntry) -> Void) {
-        completion(readEntry())
+    func snapshot(
+        for configuration: SelectCoveAccentIntent,
+        in context: Context
+    ) async -> CoveEntry {
+        readEntry(accent: configuration.colour.accent)
     }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<CoveEntry>) -> Void) {
-        let entry = readEntry()
+    func timeline(
+        for configuration: SelectCoveAccentIntent,
+        in context: Context
+    ) async -> Timeline<CoveEntry> {
+        let entry = readEntry(accent: configuration.colour.accent)
         let next = Calendar.current.date(byAdding: .hour, value: 1, to: .now) ?? .now
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        return Timeline(entries: [entry], policy: .after(next))
     }
 
-    private func readEntry() -> CoveEntry {
+    /// The accent is handed in rather than read from a shared default: it is a
+    /// property of *this* widget, which is what lets two Cove tiles on one
+    /// desktop be two different colours.
+    private func readEntry(accent: CoveAccent) -> CoveEntry {
         let context = ModelContext(CoveStore.shared)
 
         var recent = FetchDescriptor<ShelfItem>(
@@ -380,6 +492,7 @@ struct CoveProvider: TimelineProvider {
 
         return CoveEntry(
             date: .now,
+            accent: accent,
             items: items.map {
                 CaptureSnapshot(
                     id: $0.id,
@@ -404,25 +517,20 @@ struct CoveProvider: TimelineProvider {
 
 /// One capture, printed as a ticket: serial and mark along the top, the
 /// halftone shoulder, the headline, then the stub.
-private struct PassCard: View {
+private struct PassFace: View {
+    @Environment(\.coveAccent) private var accent
+
     let snapshot: CaptureSnapshot
     var headlineSize: CGFloat = 22
-    var stubHeight: CGFloat = 30
-    /// Matched to the widget's own corner when the pass fills the tile, and
-    /// kept tighter when it is one card sitting on a rack.
-    var cornerRadius: CGFloat = 16
     /// Extra room for a pass printed edge to edge — without it the type sits
     /// against the rounded corner the system clips to.
     var inset: CGFloat = 0
 
-    private var stock: Stock { Stock(snapshot.kind) }
-    private var shape: TicketShape {
-        TicketShape(cornerRadius: cornerRadius, stubHeight: stubHeight)
-    }
+    private var tint: Color { KindTint(snapshot.kind).color(on: accent) }
 
     var body: some View {
         ZStack(alignment: .top) {
-            LinearGradient(colors: stock.gradient, startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: accent.gradient, startPoint: .top, endPoint: .bottom)
 
             DotField()
                 .frame(height: 40)
@@ -439,7 +547,7 @@ private struct PassCard: View {
             // the part that has been torn off and handled, not polished.
             VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [.white.opacity(0.20), .clear],
+                    colors: [accent.ink(0.20), .clear],
                     startPoint: .top, endPoint: .bottom
                 )
                 .frame(height: 22)
@@ -449,10 +557,6 @@ private struct PassCard: View {
 
             content
         }
-        .compositingGroup()
-        .clipShape(shape)
-        .overlay { shape.stroke(Bevel(), lineWidth: 1) }
-        .modifier(PassShadow())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(snapshot.kind.label): \(snapshot.headline), from \(snapshot.subhead), saved \(shortAge(snapshot.createdAt)) ago"
@@ -464,6 +568,13 @@ private struct PassCard: View {
             HStack(spacing: 6) {
                 Micro(text: "no. \(serial(snapshot.id))")
                 Spacer(minLength: 0)
+                // The kind's colour, now that the card no longer carries it.
+                // Beside the word rather than instead of it: a dot alone is the
+                // legend the five stocks were, and this way the first card you
+                // ever see teaches what the colour means.
+                Circle()
+                    .fill(tint)
+                    .frame(width: 5, height: 5)
                 Micro(text: "cove · \(snapshot.kind.label)")
             }
 
@@ -483,11 +594,16 @@ private struct PassCard: View {
                         // A link or a note has no picture, so the stamp carries
                         // its glyph instead. Leaving the slot empty made those
                         // cards sit a step out of line with the rest of the rack.
-                        Color.white.opacity(0.16)
+                        //
+                        // Tinted rather than plain white. A capture with a
+                        // picture is recognisable from the picture; one without
+                        // has only its kind to go on, so the stamp is where that
+                        // kind is said loudest.
+                        tint.opacity(0.22)
                             .overlay {
                                 Image(systemName: snapshot.kind.systemImage)
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.9))
+                                    .foregroundStyle(tint)
                             }
                     }
                 }
@@ -495,14 +611,14 @@ private struct PassCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(.white.opacity(0.5), lineWidth: 0.75)
+                        .strokeBorder(accent.ink(0.35), lineWidth: 0.75)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(snapshot.headline)
                         .font(.system(size: headlineSize, weight: .heavy))
                         .tracking(-0.5)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(accent.ink)
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                     Micro(text: snapshot.subhead, size: 7, opacity: 0.78)
@@ -526,7 +642,7 @@ private struct PassCard: View {
     private var perforation: some View {
         Line()
             .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-            .foregroundStyle(.white.opacity(0.35))
+            .foregroundStyle(accent.ink(0.35))
             .frame(height: 1)
     }
 
@@ -539,7 +655,7 @@ private struct PassCard: View {
             Micro(text: label, size: 6, opacity: 0.58)
             Text(value.uppercased())
                 .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(accent.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
@@ -552,6 +668,111 @@ private struct PassCard: View {
             path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
             return path
         }
+    }
+}
+
+/// One capture on its own ticket.
+private struct PassCard: View {
+    let snapshot: CaptureSnapshot
+    var headlineSize: CGFloat = 22
+    var stubHeight: CGFloat = 30
+    /// Matched to the widget's own corner when the pass fills the tile, and
+    /// kept tighter when it is one card sitting on a rack.
+    var cornerRadius: CGFloat = 16
+    var inset: CGFloat = 0
+
+    private var shape: TicketShape {
+        TicketShape(cornerRadius: cornerRadius, stubHeight: stubHeight)
+    }
+
+    var body: some View {
+        PassFace(snapshot: snapshot, headlineSize: headlineSize, inset: inset)
+            .compositingGroup()
+            .clipShape(shape)
+            .overlay { shape.stroke(Bevel(), lineWidth: 1) }
+            .modifier(PassShadow())
+    }
+}
+
+/// One ticket, torn down the middle, with a capture printed either side.
+///
+/// Medium used to be two separate cards with a gap between them, and the gap
+/// was the problem: it is the only place the canvas showed, so it read as two
+/// things that had been put next to each other rather than one thing. This is a
+/// single ticket instead — the halves meet, the tear between them is a
+/// perforation with a bite out of each end, and the card is what fills the tile.
+///
+/// Both halves are now printed on the same stock, so the tear is the only thing
+/// telling them apart — which is what a real ticket's perforation does anyway.
+/// Each half still carries its own kind dot up in the corner.
+private struct SplitPass: View {
+    let left: CaptureSnapshot
+    let right: CaptureSnapshot
+    var headlineSize: CGFloat = 19
+    var cornerRadius: CGFloat = 22
+    var inset: CGFloat = 3
+
+    private var shape: SplitTicketShape {
+        SplitTicketShape(cornerRadius: cornerRadius)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            PassFace(snapshot: left, headlineSize: headlineSize, inset: inset)
+            PassFace(snapshot: right, headlineSize: headlineSize, inset: inset)
+        }
+        .overlay(alignment: .center) { perforation }
+        .compositingGroup()
+        .clipShape(shape)
+        .overlay { shape.stroke(Bevel(), lineWidth: 1) }
+        .modifier(PassShadow())
+    }
+
+    /// The tear. Drawn over the seam rather than between the halves, so the two
+    /// stocks stay touching and the line reads as printed on the ticket instead
+    /// of as a gap left between two of them.
+    ///
+    /// White, not black. A dark dash was legible when the stock was saturated;
+    /// on graphite it disappears, and with it the only thing saying the medium
+    /// is two captures rather than one wide card.
+    private var perforation: some View {
+        VerticalLine()
+            .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .foregroundStyle(.white.opacity(0.22))
+            .frame(width: 1)
+            .padding(.vertical, 10)
+    }
+
+    private struct VerticalLine: Shape {
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            return path
+        }
+    }
+}
+
+/// A rounded card with a bite taken out of the top and bottom edges, where the
+/// tear between its two halves meets them.
+private struct SplitTicketShape: Shape {
+    var cornerRadius: CGFloat = 22
+    var notchRadius: CGFloat = 6
+
+    func path(in rect: CGRect) -> Path {
+        let body = Path(roundedRect: rect, cornerRadius: cornerRadius)
+        var notches = Path()
+        for y in [rect.minY, rect.maxY] {
+            notches.addEllipse(
+                in: CGRect(
+                    x: rect.midX - notchRadius,
+                    y: y - notchRadius,
+                    width: notchRadius * 2,
+                    height: notchRadius * 2
+                )
+            )
+        }
+        return body.subtracting(notches)
     }
 }
 
@@ -625,14 +846,17 @@ private struct Utility<I: AppIntent>: View {
     }
 }
 
-/// The footer: which stocks are in the rack, and where they live.
+/// The footer: which kinds are in the rack, and where they live.
 private struct RackFooter: View {
     let entry: CoveEntry
 
-    private var stocks: [Color] {
+    /// Drawn on the canvas rather than on a pass, so the marks are taken from
+    /// the dark-stock set whatever the card is doing — the rack behind the
+    /// passes is black in every theme.
+    private var kinds: [Color] {
         var seen: [Color] = []
         for item in entry.items {
-            let colour = Stock(item.kind).chipColor
+            let colour = KindTint(item.kind).color(on: .deepWater)
             if !seen.contains(where: { $0 == colour }) { seen.append(colour) }
         }
         return Array(seen.prefix(3))
@@ -640,7 +864,7 @@ private struct RackFooter: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(Array(stocks.enumerated()), id: \.offset) { index, colour in
+            ForEach(Array(kinds.enumerated()), id: \.offset) { index, colour in
                 Circle()
                     .fill(colour)
                     .frame(width: 13, height: 13)
@@ -661,11 +885,18 @@ private struct RackFooter: View {
 }
 
 private struct EmptyRack: View {
+    @Environment(\.coveAccent) private var accent
+
     var body: some View {
         VStack(spacing: 8) {
+            // The one place the accent shows on an empty shelf. Without it,
+            // someone who installs Cove and opens the colour drawer before
+            // saving anything picks six colours and watches nothing happen.
+            // The tint rather than the ink: this is drawn on the black rack,
+            // never on stock, and all six tints carry there.
             Image(systemName: "tray")
                 .font(.system(size: 18, weight: .light))
-                .foregroundStyle(Cove.inkSecondary)
+                .foregroundStyle(accent.tint)
             Text("drop something\ninto the notch".uppercased())
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .tracking(0.5)
@@ -714,11 +945,18 @@ struct CoveWidgetView: View {
     let entry: CoveEntry
 
     var body: some View {
-        switch family {
-        case .systemSmall: SmallView(entry: entry)
-        case .systemLarge: LargeView(entry: entry)
-        default: MediumView(entry: entry)
+        Group {
+            switch family {
+            case .systemSmall: SmallView(entry: entry)
+            case .systemLarge: LargeView(entry: entry)
+            default: MediumView(entry: entry)
+            }
         }
+        // Planted once, here, rather than passed down. A pass is drawn by six
+        // small views — the halftone, the bevel, every micro-label — and each of
+        // them needs to know what it is being printed on. Threading a parameter
+        // through all six is how one of them ends up still hardcoded in white.
+        .environment(\.coveAccent, entry.accent)
     }
 }
 
@@ -743,24 +981,42 @@ private struct SmallView: View {
     }
 }
 
-/// Medium: two passes, side by side.
+/// Medium: one ticket, torn down the middle, a capture either side.
 private struct MediumView: View {
     let entry: CoveEntry
 
     var body: some View {
         if entry.items.isEmpty {
             EmptyRack().padding(Layout.rackPadding)
+        } else if entry.items.count == 1, let only = entry.items.first {
+            // Nothing to tear against. One capture gets the whole ticket rather
+            // than half of one beside an empty half.
+            PassButton(itemID: only.id) {
+                PassCard(
+                    snapshot: only,
+                    headlineSize: 21,
+                    stubHeight: 30,
+                    cornerRadius: Layout.tileCorner,
+                    inset: Layout.bleedInset
+                )
+            }
         } else {
-            HStack(spacing: Layout.passGap) {
-                ForEach(entry.items.prefix(2)) { item in
-                    PassButton(itemID: item.id) {
-                        PassCard(
-                            snapshot: item,
-                            headlineSize: 19,
-                            stubHeight: 30,
-                            cornerRadius: Layout.tileCorner,
-                            inset: Layout.bleedInset
-                        )
+            let pair = Array(entry.items.prefix(2))
+            // Each half opens its own capture, so the ticket being one object
+            // does not cost the two halves their separate destinations.
+            ZStack {
+                SplitPass(
+                    left: pair[0],
+                    right: pair[1],
+                    headlineSize: 19,
+                    cornerRadius: Layout.tileCorner,
+                    inset: Layout.bleedInset
+                )
+                HStack(spacing: 0) {
+                    ForEach(pair) { item in
+                        PassButton(itemID: item.id) {
+                            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
                 }
             }
@@ -811,7 +1067,21 @@ private struct LargeView: View {
 
 struct CoveWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "CoveWidget", provider: CoveProvider()) { entry in
+        // Configurable, so the colour belongs to the tile: right-click the
+        // widget, Edit Widget, pick one of six. The app itself is always Deep
+        // Water — this is the only place a colour is chosen.
+        //
+        // `kind` is the original, and going back to it is the fix rather than
+        // an oversight. Renaming it was an attempt to dodge a descriptor cache
+        // that turned out not to be the problem, and each rename orphaned every
+        // placed tile — "CoveShelf", "CoveRack", "CovePassRack" and
+        // "CoveTicketRack" are all dead ends with abandoned widgets behind them.
+        // This is the one that was demonstrably serving Edit Widget correctly.
+        AppIntentConfiguration(
+            kind: "CoveWidget",
+            intent: SelectCoveAccentIntent.self,
+            provider: CoveProvider()
+        ) { entry in
             CoveWidgetView(entry: entry)
                 .containerBackground(for: .widget) { RackCanvas() }
         }
