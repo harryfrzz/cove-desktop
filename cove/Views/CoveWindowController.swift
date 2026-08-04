@@ -136,6 +136,9 @@ private struct CoveWindowView: View {
     /// jump around while someone is still typing.
     @State private var searchMatches: Set<UUID>?
     @FocusState private var isSearchFocused: Bool
+    /// Held so the window re-renders when the accent changes — see the same
+    /// state on `NotchRootView` for why a colour property reading this store is
+    /// not enough on its own.
 
     /// Long enough for the last print to land: the implode stagger tops out at
     /// 0.36s and its spring runs ~0.42s. The spring's final settling is
@@ -788,9 +791,10 @@ private struct CoveWindowView: View {
         } label: {
             Label(candidate.title, systemImage: candidate.systemImage)
                 .font(.subheadline.weight(.medium))
-                // Black on the seafoam tint, not white: the accent is a light
-                // colour and white on it fails contrast at this size.
-                .foregroundStyle(isOn ? AnyShapeStyle(CoveTheme.surface) : AnyShapeStyle(.primary))
+                // Asked for rather than picked. Whether cream or black reads on
+                // the pill depends on which of the six accents is selected, and
+                // this line has been hardcoded wrong in both directions.
+                .foregroundStyle(isOn ? AnyShapeStyle(CoveTheme.onAccent) : AnyShapeStyle(.primary))
                 .padding(.horizontal, 15)
                 .padding(.vertical, 8)
                 // Load-bearing. A plain button hit-tests what it actually draws,

@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// The island's palette — Cove's identity: a coastline seen from the water,
-/// ocean-deep chrome with one seafoam accent.
+/// The island's palette — Cove's identity: pure black, warm cream, and exactly
+/// one accent, which is the only colour here the user gets to change. The
+/// widget is built from the same three, which is what stops the two reading as
+/// separate apps.
 ///
 /// Unlike the phone app, this one does not follow the system appearance: the
 /// panel hangs off a black notch and has to meet it seamlessly, so `surface`
@@ -16,6 +18,12 @@ enum CoveTheme {
     /// The one lift used for a control that has to look pressable — a tab, a
     /// field, a chip. Kept far below the level where it would read as a
     /// separate grey surface.
+    ///
+    /// Back to the ink rather than the accent. A lift tinted with the accent
+    /// followed the chosen colour, which meant every field and chip in the app
+    /// changed hue with the picker — six themes' worth of surfaces to check
+    /// rather than six accents. The accent is the one thing that moves; the
+    /// surfaces under it stay put.
     static let raised = Color(red: 0.96, green: 0.94, blue: 0.90).opacity(0.07)
 
     /// Warm foam, not clinical white — the same cream the icon's horizon glow
@@ -25,14 +33,40 @@ enum CoveTheme {
     static let inkTertiary = ink.opacity(0.34)
 
     static let hairline = ink.opacity(0.10)
-    /// Cove's one accent — the seafoam that sits on the icon's horizon line,
-    /// brightened enough to carry on true black. The same colour the working
-    /// controls use.
-    static let accent = Color(red: 0.42, green: 0.78, blue: 0.74)
+    /// Cove's one accent — whichever of the six the user has chosen, Deep Water
+    /// until they choose.
+    ///
+    /// Computed rather than stored, so a change in Settings reaches every
+    /// surface without anything being threaded through. What makes that show up
+    /// on screen is separate: SwiftUI only re-renders a view that *read* an
+    /// observable during its body, so the two roots — `NotchRootView` and
+    /// `CoveWindowView` — read the store's selection on purpose. Take those
+    /// reads out and the accent changes in memory while the window keeps
+    /// drawing the old one.
+    /// Deep Water, always. The app's colour is not the user's to change — the
+    /// six accents exist for the *widget*, where each tile carries its own and
+    /// the choice is made in Edit Widget. An app that repainted itself to match
+    /// would make the island and the window follow whichever tile was edited
+    /// last, which is not a preference so much as a side effect.
+    static let accent = Color(red: 0.24, green: 0.52, blue: 0.96)
 
-    /// The original working-shimmer tone. The identity update changed the
-    /// shared accent to seafoam, but the warm orange keeps the animated band
-    /// recognisable as activity rather than a second static accent.
+    /// What may be printed *on* `accent`, which is not a constant and is the
+    /// single most bug-prone thing in this file.
+    ///
+    /// Cream, because the accent is Deep Water and cream on it is 5.9:1. Still
+    /// its own name rather than `ink` at the call sites: the two places that
+    /// print on the accent got this wrong in both directions while the palette
+    /// was being decided, and naming the relationship is what stops the next
+    /// change from being a hunt.
+    static let onAccent = ink
+
+    /// The working-shimmer tone, and deliberately left alone.
+    ///
+    /// The warm orange is the island's, and it stays the island's. It was
+    /// briefly changed to a cream on the argument that the accent is now
+    /// user-chosen and three of the six themes are in orange's family — but the
+    /// accent the app uses is Deep Water, the band only ever runs on the island
+    /// and the window, and the shimmer is not ours to redecide.
     static let shimmer = Color(red: 0.98, green: 0.64, blue: 0.32)
 
     /// The library window's own backdrop: pure black in dark mode, pure white in
