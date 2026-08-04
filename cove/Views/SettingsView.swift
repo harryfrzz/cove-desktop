@@ -19,6 +19,9 @@ struct SettingsView: View {
     @State private var updater = UpdateChecker.shared
     @State private var appearance = CoveAppearanceStore.shared
     @State private var screenshots = ScreenshotWatcher.shared
+    /// Held rather than read once, so the row follows Apple Intelligence
+    /// finishing its download while this page is open.
+    @State private var assistant = CoveAssistant.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,13 +69,30 @@ struct SettingsView: View {
             SettingsRow("Embeddings", value: model.modelName, badge: model.modelBadge)
             SettingsRow("Albums", value: model.classifierName, badge: model.classifierBadge)
             SettingsRow("Text recognition", value: "Vision", badge: "On")
-            SettingsRow("Search", value: "Keyword", badge: "On")
-            SettingsRow("Language model", value: "Not installed", tone: .muted)
+            // Both of these were fixed strings, and both had become untrue.
+            // This page is the one place Cove says what it is actually running,
+            // so a hardcoded answer here is worse than no page.
+            SettingsRow("Search", value: searchName, badge: "On")
+            if assistant.isReady {
+                SettingsRow("Language model", value: "Apple Intelligence", badge: "On")
+            } else if case .unavailable(let reason) = assistant.readiness {
+                SettingsRow("Language model", value: reason, tone: .muted)
+            }
 
             if let failure = model.modelFailure {
                 SettingsRow("Problem", value: failure, tone: .warning)
             }
         }
+    }
+
+    /// Search says which half is actually running.
+    ///
+    /// The semantic half needs MobileCLIP's text tower to encode the query, so
+    /// on a Mac where the encoders are missing it is not merely off — it cannot
+    /// start. Saying "Keyword" there is the truth, and saying it everywhere was
+    /// the bug.
+    private var searchName: String {
+        AIServices.current.embeddings == nil ? "Keyword" : "Meaning and keyword"
     }
 
     private var appearanceSection: some View {

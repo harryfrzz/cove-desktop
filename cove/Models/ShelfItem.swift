@@ -48,6 +48,25 @@ final class ShelfItem {
     var title: String
     var userNote: String?
     @Attribute(.externalStorage) var imageData: Data?
+    /// A small copy of `imageData`, for anything that draws the capture at
+    /// card size rather than opening it.
+    ///
+    /// This exists because of the widget. A timeline is built in an extension
+    /// with a hard memory ceiling, and the rack shows up to eight captures at
+    /// once; reading eight 2048px JPEGs and decoding them to draw a 26pt stamp
+    /// is how that extension gets killed mid-render, which on the desktop looks
+    /// like the widget going blank for no reason. Nothing on a card needs more
+    /// than this, and at ~320px it is roughly a fiftieth of the pixels.
+    ///
+    /// Separate attribute rather than a derived cache: `.externalStorage` blobs
+    /// are only faulted in when the property is actually read, so a fetch that
+    /// touches `thumbnailData` and never `imageData` never pays for the
+    /// original at all. That is the whole saving, and it is lost the moment
+    /// anything on that path reads `imageData` for any reason.
+    ///
+    /// Optional forever: it is nil for every capture saved before this existed,
+    /// until the pipeline backfills it, and nil for items that never had pixels.
+    @Attribute(.externalStorage) var thumbnailData: Data?
     var linkURL: URL?
     var linkTitle: String?
     var linkHost: String?
@@ -120,6 +139,10 @@ final class ShelfItem {
             extractedText,
             summary,
             sourceApp,
+            // The host alone loses which video, which repo, which article. For
+            // a link the URL is often the only Latin text the item has — a
+            // Korean video's title is Korean, and its address is not.
+            linkURL?.absoluteString,
             tags.joined(separator: " ")
         ]
         .compactMap { $0 }
@@ -133,6 +156,7 @@ final class ShelfItem {
         title: String,
         userNote: String? = nil,
         imageData: Data? = nil,
+        thumbnailData: Data? = nil,
         linkURL: URL? = nil,
         linkTitle: String? = nil,
         linkHost: String? = nil,
@@ -149,6 +173,7 @@ final class ShelfItem {
         self.title = title
         self.userNote = userNote
         self.imageData = imageData
+        self.thumbnailData = thumbnailData
         self.linkURL = linkURL
         self.linkTitle = linkTitle
         self.linkHost = linkHost

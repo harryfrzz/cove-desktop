@@ -135,6 +135,15 @@ private struct CoveWindowView: View {
     /// should be drawn, and re-ordering it by relevance would make the piles
     /// jump around while someone is still typing.
     @State private var searchMatches: Set<UUID>?
+    /// Where each match placed, so the shelf can show them in the order the
+    /// search ranked them.
+    ///
+    /// The set above answers "is this a match", which was all a keyword search
+    /// needed — every hit contained the word and recency was as good an order as
+    /// any. A semantic search's whole output is the ordering: the item that
+    /// merely feels related and the one that is the answer are both matches, and
+    /// collapsing them into a set threw away the only thing distinguishing them.
+    @State private var searchRanking: [UUID: Int]?
     @FocusState private var isSearchFocused: Bool
     /// Held so the window re-renders when the accent changes — see the same
     /// state on `NotchRootView` for why a colour property reading this store is
@@ -560,12 +569,18 @@ private struct CoveWindowView: View {
     /// library draws is built from this rather than from `items`, so one pill or
     /// one word governs the albums, the cards, and the empty state at once.
     private var visibleItems: [ShelfItem] {
-        items.filter { item in
+        let matching = items.filter { item in
             filter.matches(item) && (searchMatches?.contains(item.id) ?? true)
+        }
+        // Only while searching. With no query there is no ranking, and the
+        // shelf's own newest-first order is the right one.
+        guard let searchRanking else { return matching }
+        return matching.sorted {
+            (searchRanking[$0.id] ?? .max) < (searchRanking[$1.id] ?? .max)
         }
     }
 
-    /// Runs the shelf's own keyword search, debounced.
+    /// Runs the shelf's search, debounced.
     ///
     /// Restarted on every keystroke by `task(id:)`, so the sleep is the whole
     /// debounce: a cancelled task never reaches the search, and someone typing
@@ -574,6 +589,7 @@ private struct CoveWindowView: View {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             searchMatches = nil
+            searchRanking = nil
             return
         }
 
@@ -583,8 +599,11 @@ private struct CoveWindowView: View {
             return
         }
 
-        let results = try? await AIServices.current.search.search(query, in: items)
-        searchMatches = Set((results ?? []).map(\.id))
+        let results = (try? await AIServices.current.search.search(query, in: items)) ?? []
+        searchMatches = Set(results.map(\.id))
+        searchRanking = Dictionary(
+            uniqueKeysWithValues: results.enumerated().map { ($0.element.id, $0.offset) }
+        )
     }
 
     /// The pills worth offering: the shelf's own kinds, in a fixed order, plus

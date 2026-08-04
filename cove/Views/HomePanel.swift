@@ -15,11 +15,17 @@ struct HomePanel: View {
 
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ChatThread.updatedAt, order: .reverse) private var threads: [ChatThread]
+    /// The shelf, for grounding a question in it. Newest first, and narrowed to
+    /// a handful by the search before any of it reaches the model.
+    @Query(sort: \ShelfItem.createdAt, order: .reverse) private var items: [ShelfItem]
 
     @State private var tray = TempTray.shared
     @State private var activity = NotchActivityCenter.shared
     @State private var answer: String?
     @State private var isThinking = false
+    /// Held so the bar appears by itself if Apple Intelligence finishes
+    /// downloading while the panel is open.
+    @State private var assistant = CoveAssistant.shared
     @FocusState private var isPromptFocused: Bool
     /// Which page the scroll view has settled on. Optional because that is what
     /// `scrollPosition(id:)` reports — it is briefly `nil` mid-flight, which is
@@ -136,7 +142,11 @@ struct HomePanel: View {
             // the other two are for reading what is already there, and on a
             // panel this short the bar's height is the difference between three
             // visible rows and five.
-            if page == .home {
+            // …and only when there is a model to answer. A prompt bar with
+            // nothing behind it is a control that takes a question and cannot
+            // do anything with it, which is what this used to be: it shimmered,
+            // then replied that it wasn't wired up. Better to not offer it.
+            if page == .home, assistant.isReady {
                 promptBar
                     .padding(.horizontal, Self.inset)
                     .padding(.bottom, Self.inset)
@@ -279,15 +289,59 @@ struct HomePanel: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Stores both sides of the exchange and shows the reply where the mark
-    /// was. The model that would write that reply is not in this build, so the
-    /// reply says exactly that rather than sounding like an answer.
+    /// Asks the on-device model, grounded in the captures that best match the
+    /// question, and stores both sides of the exchange.
+    ///
+    /// Two things here are deliberate. The shimmer now covers real work, so
+    /// there is no sleep: it lasts exactly as long as the model takes, which is
+    /// what a working indicator is for. And the reply is written after the
+    /// answer exists rather than before — the version this replaced inserted
+    /// both turns up front and then waited 900ms to reveal a string it already
+    /// had, which is the shape of a fake.
+    ///
+    /// The question is still saved when the answer fails. Whatever went wrong
+    /// with the model, the user typed something and the history should show it.
     private func submit() {
         let question = model.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !isThinking else { return }
         model.promptText = ""
         isThinking = true
 
+        Task {
+            // Retrieval first, so the model reads the shelf rather than
+            // improvising about it. This is the same search the library runs,
+            // which since the embeddings landed means a question can reach a
+            // capture that never contained its words.
+            let matches = (try? await AIServices.current.search.search(question, in: items)) ?? []
+            // Topped up with what is recent when the search came back thin, so
+            // the model is never asked about a shelf it cannot see.
+            let grounding = assistant.grounding(matches: matches, recent: items)
+
+            let reply: String
+            do {
+                reply = try await assistant.answer(
+                    to: question,
+                    grounding: grounding,
+                    matched: !matches.isEmpty
+                )
+            } catch {
+                // Said in Cove’s voice, and true: no answer was produced. The
+                // one thing it must not do is read like one.
+                reply = error.localizedDescription
+            }
+
+            record(question: question, reply: reply)
+
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isThinking = false
+                answer = reply
+            }
+            try? await Task.sleep(for: .seconds(6))
+            withAnimation(.easeInOut(duration: 0.25)) { answer = nil }
+        }
+    }
+
+    private func record(question: String, reply: String) {
         let thread: ChatThread
         if let existing = threads.first {
             thread = existing
@@ -296,22 +350,9 @@ struct HomePanel: View {
             modelContext.insert(thread)
         }
 
-        let reply = "Cove’s on-device model isn’t wired up yet, so there’s no answer to give — the question is saved."
-
         modelContext.insert(thread.append(role: .user, text: question))
         modelContext.insert(thread.append(role: .assistant, text: reply))
         try? modelContext.save()
-
-        Task {
-            // Long enough for the shimmer to read as work rather than a flicker.
-            try? await Task.sleep(for: .milliseconds(900))
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isThinking = false
-                answer = reply
-            }
-            try? await Task.sleep(for: .seconds(6))
-            withAnimation(.easeInOut(duration: 0.25)) { answer = nil }
-        }
     }
 
     // MARK: - Screenshots

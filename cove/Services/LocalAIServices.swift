@@ -115,10 +115,9 @@ nonisolated struct LocalEnrichmentService: EnrichmentService {
 /// Literal keyword matching over everything an item carries, ranked by where
 /// the hit landed.
 ///
-/// This is the whole search for now. The semantic half — a query vector dotted
-/// against stored embeddings, then fused with these results — is the next
-/// phase; the ranking below is what keeps the shelf usable meanwhile, and it is
-/// also what a semantic search cannot do: find an exact order number.
+/// Still the whole search when the encoders are not installed, and still half
+/// of it when they are: this is what a semantic search cannot do, which is find
+/// an exact order number. See `SemanticSearchService` for the other half.
 nonisolated struct KeywordSearchService: SearchService {
     @MainActor
     func search(_ query: String, in items: [ShelfItem]) async throws -> [ShelfItem] {
@@ -144,25 +143,220 @@ nonisolated struct KeywordSearchService: SearchService {
             .map(\.item)
     }
 
-    /// Every term must appear somewhere; the weight is about *where*. A title
-    /// hit is what the user named the thing, an extracted-text hit is a word
-    /// that happened to be inside a screenshot.
+    /// How well one item answers the query. Zero means "not a match".
+    ///
+    /// Terms are scored independently and an item needs *one* of them, not all.
+    /// Requiring all of them was a quiet recall bug with a very ordinary
+    /// trigger: a saved YouTube link matches "youtube" on its host and nothing
+    /// on "video", so asking about "the youtube video" scored it zero and the
+    /// shelf swore it had no such thing. Anyone typing a phrase rather than a
+    /// keyword hit this, and it got worse the more precisely they described
+    /// what they wanted.
+    ///
+    /// Precision is kept by the ranking instead of by exclusion: the count of
+    /// matched terms is worth more than any combination of field weights — the
+    /// heaviest a single term can score is 30 — so an item matching every word
+    /// always sorts above one matching some of them, and the partial matches
+    /// sit below rather than being thrown away.
     private static func score(_ item: ShelfItem, terms: [String]) -> Int {
         var total = 0
+        var matched = 0
+
         for term in terms {
-            var termScore = 0
-            if item.title.localizedCaseInsensitiveContains(term) { termScore += 8 }
-            if item.tags.contains(where: { $0.localizedCaseInsensitiveContains(term) }) {
-                termScore += 5
-            }
-            if item.userNote?.localizedCaseInsensitiveContains(term) == true { termScore += 4 }
-            if item.linkHost?.localizedCaseInsensitiveContains(term) == true { termScore += 4 }
-            if item.summary?.localizedCaseInsensitiveContains(term) == true { termScore += 3 }
-            if item.extractedText?.localizedCaseInsensitiveContains(term) == true { termScore += 2 }
-            if item.sourceApp?.localizedCaseInsensitiveContains(term) == true { termScore += 2 }
-            guard termScore > 0 else { return 0 }
+            let termScore = weight(of: item, for: term)
+            guard termScore > 0 else { continue }
+            matched += 1
             total += termScore
         }
+
+        guard matched > 0 else { return 0 }
+        return matched * 100 + total
+    }
+
+    /// Where the hit landed. A title hit is what the user named the thing, an
+    /// extracted-text hit is a word that happened to be inside a screenshot.
+    private static func weight(of item: ShelfItem, for term: String) -> Int {
+        var score = 0
+        if item.title.localizedCaseInsensitiveContains(term) { score += 8 }
+        if item.tags.contains(where: { $0.localizedCaseInsensitiveContains(term) }) {
+            score += 5
+        }
+        if item.userNote?.localizedCaseInsensitiveContains(term) == true { score += 4 }
+        if item.linkHost?.localizedCaseInsensitiveContains(term) == true { score += 4 }
+        if item.summary?.localizedCaseInsensitiveContains(term) == true { score += 3 }
+        if item.extractedText?.localizedCaseInsensitiveContains(term) == true { score += 2 }
+        if item.sourceApp?.localizedCaseInsensitiveContains(term) == true { score += 2 }
+        // The URL itself, which was never searched. It is the weakest signal —
+        // it is full of slugs and ids nobody types — but it is also the only
+        // place a word like "watch" or a video id lives.
+        if item.linkURL?.absoluteString.localizedCaseInsensitiveContains(term) == true {
+            score += 2
+        }
+        return score
+    }
+}
+
+/// Keyword search and the stored vectors, fused.
+///
+/// The vectors were being computed, versioned, re-indexed on a model change and
+/// then never read by anything except the album classifier. This is what reads
+/// them.
+///
+/// Three ranked lists go in and one comes out:
+///
+///   1. **Keyword.** Exact, high precision, and the only one that can find an
+///      order number or a filename.
+///   2. **Query text against each item's text vector.** Finds the capture that
+///      says "invoice" when the word typed was "receipt".
+///   3. **Query text against each item's *image* vector.** MobileCLIP puts both
+///      towers in one space, so this finds a photo of a dog for the word "dog"
+///      on an item that carries no text at all. It is the one result the shelf
+///      could not previously produce by any means.
+///
+/// Lists 2 and 3 are kept apart rather than merged into a best-of, because they
+/// are not on the same scale: text-to-text similarities sit well above
+/// text-to-image ones, so one shared cut-off would let a strong text match
+/// silently suppress every cross-modal result.
+nonisolated struct SemanticSearchService: SearchService {
+    let embeddings: any EmbeddingService
+
+    private let keyword = KeywordSearchService()
+
+    /// The most a single semantic list may contribute. Keyword results are
+    /// never capped — an exact match is an exact match — but "things that feel
+    /// related" is a long tail, and past a dozen it stops being a search result
+    /// and starts being the shelf again.
+    private static let maxSemanticMatches = 12
+
+    /// How far above the crowd a similarity has to stand, in standard
+    /// deviations.
+    ///
+    /// Deliberately *not* an absolute cosine. `MobileCLIPAlbumClassifier` already
+    /// records why: raw similarities live in a narrow band around 0.2–0.35, they
+    /// are not comparable across queries, and any fixed number here is a
+    /// invented constant that returns the whole shelf for one query and nothing
+    /// for the next.
+    ///
+    /// What separates a real query from gibberish is not the height of the best
+    /// score, it is whether anything stands out at all. A word the shelf knows
+    /// produces a few outliers; a word it does not produces a flat distribution
+    /// with a meaningless maximum. Cutting at two deviations above the mean
+    /// asks that question directly and calibrates itself to each query.
+    private static let outlierDeviations: Float = 2
+
+    /// Below this many scored items the mean and deviation are not describing a
+    /// distribution, they are describing three numbers. Keyword search alone
+    /// covers a shelf this small perfectly well.
+    private static let minimumSampleSize = 5
+
+    @MainActor
+    func search(_ query: String, in items: [ShelfItem]) async throws -> [ShelfItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return items }
+
+        let byKeyword = try await keyword.search(trimmed, in: items)
+
+        // A query the text tower cannot encode is not a failed search — it is a
+        // keyword search, which is what Cove did before any of this.
+        guard let vector = try? await embeddings.embed(text: trimmed) else {
+            return byKeyword
+        }
+
+        let byText = Self.outliers(near: vector, in: items) { $0.textEmbedding }
+        let byImage = Self.outliers(near: vector, in: items) { $0.embedding }
+        guard !byText.isEmpty || !byImage.isEmpty else { return byKeyword }
+
+        return Self.fused([byKeyword, byText, byImage])
+    }
+
+    // MARK: - The vector half
+
+    /// Items whose stored vector stands out from the rest for this query.
+    ///
+    /// Only vectors written by the model currently installed are considered.
+    /// Two encoders produce two different spaces, and a dot product across them
+    /// is a number with no meaning — which would not look like a bug, it would
+    /// look like search having become bad.
+    private static func outliers(
+        near query: [Float],
+        in items: [ShelfItem],
+        using vector: (ShelfItem) -> [Float]?
+    ) -> [ShelfItem] {
+        let version = AIServices.currentEmbeddingModelVersion
+        var scored: [(item: ShelfItem, similarity: Float)] = []
+
+        for item in items where item.embeddingModelVersion == version {
+            // Length equality is the cheap guard against a vector written by a
+            // model with the same version string and a different shape.
+            guard let stored = vector(item), stored.count == query.count else { continue }
+            scored.append((item, dot(query, stored)))
+        }
+
+        guard scored.count >= minimumSampleSize else { return [] }
+
+        let similarities = scored.map(\.similarity)
+        let mean = similarities.reduce(0, +) / Float(similarities.count)
+        let variance = similarities
+            .reduce(Float.zero) { $0 + ($1 - mean) * ($1 - mean) } / Float(similarities.count)
+        let deviation = variance.squareRoot()
+
+        // Every item equally similar means nothing was found, however high the
+        // numbers are. Without this, a shelf of near-identical screenshots would
+        // return all of them for any word at all.
+        guard deviation > 0 else { return [] }
+
+        let floor = mean + outlierDeviations * deviation
+        return scored
+            .filter { $0.similarity >= floor }
+            .sorted { $0.similarity > $1.similarity }
+            .prefix(maxSemanticMatches)
+            .map(\.item)
+    }
+
+    /// Both towers L2-normalise on the way out, so this is a cosine.
+    private static func dot(_ a: [Float], _ b: [Float]) -> Float {
+        var total = Float.zero
+        for index in a.indices { total += a[index] * b[index] }
         return total
+    }
+
+    // MARK: - Fusion
+
+    /// Reciprocal rank fusion.
+    ///
+    /// Rank-based rather than score-based, because the three lists are measured
+    /// in different units — an integer keyword weight, a text-to-text cosine and
+    /// a text-to-image cosine — and no normalisation of those onto one scale is
+    /// honest. What each list can be trusted to say is the order it put things
+    /// in, and that is all this reads.
+    ///
+    /// An item found by two lists outranks one found by either alone, which is
+    /// the behaviour worth having: the capture that both says "receipt" and
+    /// looks like one is the answer.
+    private static func fused(_ lists: [[ShelfItem]]) -> [ShelfItem] {
+        // The standard damping constant. Large enough that the gap between rank
+        // 1 and rank 2 does not dwarf the agreement of two lists further down.
+        let damping = 60.0
+
+        var scores: [UUID: Double] = [:]
+        var items: [UUID: ShelfItem] = [:]
+
+        for list in lists {
+            for (index, item) in list.enumerated() {
+                scores[item.id, default: 0] += 1 / (damping + Double(index + 1))
+                items[item.id] = item
+            }
+        }
+
+        return scores
+            .sorted {
+                // Ties break on recency, so equal relevance still reads
+                // newest-first like the rest of the shelf.
+                $0.value == $1.value
+                    ? (items[$0.key]?.createdAt ?? .distantPast)
+                        > (items[$1.key]?.createdAt ?? .distantPast)
+                    : $0.value > $1.value
+            }
+            .compactMap { items[$0.key] }
     }
 }
