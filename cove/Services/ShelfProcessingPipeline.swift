@@ -223,6 +223,20 @@ actor ShelfProcessor {
         }
         saveQuietly()
 
+        // Captures that have pixels but no card-sized copy of them: everything
+        // saved before `thumbnailData` existed. Until this has run, those items
+        // draw no stamp on the widget at all — the widget will not read the
+        // full-size image to cover for a missing thumbnail, because doing that
+        // is the bug the thumbnail exists to fix.
+        let unthumbnailed = (try? modelContext.fetch(FetchDescriptor<ShelfItem>()))?.filter {
+            $0.processingState == .ready && $0.imageData != nil && $0.thumbnailData == nil
+        } ?? []
+        for item in unthumbnailed {
+            item.processingState = .queued
+            enqueueSilently(item.id)
+        }
+        saveQuietly()
+
         if AIServices.current.embeddings != nil {
             let currentVersion = AIServices.currentEmbeddingModelVersion
             let stale = (try? modelContext.fetch(FetchDescriptor<ShelfItem>()))?.filter {
@@ -294,13 +308,30 @@ actor ShelfProcessor {
         // link into an image album, where it isn't a link any more.
         let isVisualCapture = item.kind != .link
 
-        // 1. Decode once; OCR and the image encoder share the bitmap.
+        // 1. Decode once; OCR, the image encoder and the thumbnail share the
+        //    bitmap.
         var decodedImage: NSImage?
         if isVisualCapture, let imageData = item.imageData {
             decodedImage = NSImage(data: imageData)
             if decodedImage == nil {
                 hardFailure = "The saved image data could not be decoded."
             }
+        }
+
+        // 1a. The card-sized copy, for captures saved before it existed.
+        //
+        // Here rather than in its own sweep because the expensive part is the
+        // decode, and this pass has already paid for it. `refreshAll` and the
+        // launch reconciliation both run every item through here, so the
+        // backfill is something the shelf does to itself rather than a
+        // migration anyone has to trigger.
+        // Deliberately not behind `isVisualCapture`: a link's cover is not the
+        // user's pixels and has no business being OCR'd or embedded, but it is
+        // still what its card draws, so it still needs the small copy. That is
+        // the one case `decodedImage` is nil and there is an image anyway.
+        if item.thumbnailData == nil, let imageData = item.imageData {
+            item.thumbnailData = (decodedImage ?? NSImage(data: imageData))?.thumbnailJPEGData()
+            saveQuietly()
         }
 
         // 2. OCR (images only). Empty text is a normal outcome, not an error.
@@ -494,6 +525,11 @@ actor ShelfProcessor {
         item.linkPreviewFetchedAt = .now
         if let imageData = preview.imageData {
             item.imageData = imageData
+            // A cover arriving here is the one image path that does not come
+            // through `CaptureIngest`, so it is also the one that would
+            // otherwise leave a link with a full-size image and no thumbnail —
+            // which is exactly the case the widget then pays for.
+            item.thumbnailData = NSImage(data: imageData)?.thumbnailJPEGData()
         }
         if let title = preview.title {
             item.linkTitle = title

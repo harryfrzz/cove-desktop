@@ -440,8 +440,55 @@ struct CaptureSnapshot: Identifiable {
     let linkHost: String?
     let linkTitle: String?
     let userNote: String?
-    let imageData: Data?
+    /// The card-sized copy, never the original. See `ShelfItem.thumbnailData`:
+    /// reading `imageData` here would fault in up to eight 2048px JPEGs and
+    /// decode them to draw a 26pt stamp, which is what was getting this
+    /// extension killed mid-render.
+    let thumbnailData: Data?
     let createdAt: Date
+}
+
+extension CaptureSnapshot {
+    /// The rack the gallery shows. Four, because that is what the large size
+    /// draws, and the smaller sizes take the first one or two.
+    ///
+    /// One of each kind that carries a different mark, so the preview shows the
+    /// colour legend doing its job rather than four identical cards. No
+    /// thumbnails: a capture without pixels draws its kind's glyph, which is
+    /// both honest here and the more distinctive picture.
+    static var samples: [CaptureSnapshot] {
+        [
+            sample("Boarding pass", kind: .screenshot, app: "Safari", minutesAgo: 4),
+            sample("Design references", kind: .link, app: "Arc", minutesAgo: 47, host: "are.na"),
+            sample("Rent is due Friday", kind: .text, app: "Notes", minutesAgo: 180),
+            sample("Kitchen tiles", kind: .image, app: "Photos", minutesAgo: 1500)
+        ]
+    }
+
+    private static func sample(
+        _ title: String,
+        kind: ShelfItemKind,
+        app: String,
+        minutesAgo: Int,
+        host: String? = nil
+    ) -> CaptureSnapshot {
+        CaptureSnapshot(
+            // Fixed ids, so the serial printed on each pass ("no. 4F2") is
+            // stable between renders instead of flickering as the gallery
+            // redraws.
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000000000\(String(format: "%02d", minutesAgo % 100))")
+                ?? UUID(),
+            title: title,
+            kind: kind,
+            sourceApp: app,
+            extractedText: nil,
+            linkHost: host,
+            linkTitle: host == nil ? nil : title,
+            userNote: kind == .text ? title : nil,
+            thumbnailData: nil,
+            createdAt: Date(timeIntervalSinceNow: -Double(minutesAgo * 60))
+        )
+    }
 }
 
 // MARK: - Provider
@@ -450,8 +497,27 @@ struct CaptureSnapshot: Identifiable {
 /// nudges this with `WidgetCenter.reloadAllTimelines()` after a capture; the
 /// hourly refresh below is only a fallback for the day rolling over.
 struct CoveProvider: AppIntentTimelineProvider {
+    /// What is drawn before there is anything real to draw: the widget gallery,
+    /// and the moment between a tile being placed and its first timeline.
+    ///
+    /// Representative captures rather than an empty shelf. This returned no
+    /// items from the first version of this file onwards, which meant the one
+    /// place Cove gets to make its case — the gallery someone is scrolling
+    /// while deciding whether to add it — showed a blank rack with a tray icon,
+    /// redacted into a grey box. The widget was working the whole time; it just
+    /// advertised itself as nothing.
+    ///
+    /// The samples are deliberately generic. A placeholder is rendered before
+    /// the store has been read and sometimes before the user has saved
+    /// anything, so it cannot be anyone's real capture, and inventing plausible
+    /// personal detail here would be worse than a grey box.
     func placeholder(in context: Context) -> CoveEntry {
-        CoveEntry(date: .now, items: [], total: 0, todayCount: 0)
+        CoveEntry(
+            date: .now,
+            items: CaptureSnapshot.samples,
+            total: 24,
+            todayCount: 4
+        )
     }
 
     func snapshot(
@@ -474,7 +540,15 @@ struct CoveProvider: AppIntentTimelineProvider {
     /// property of *this* widget, which is what lets two Cove tiles on one
     /// desktop be two different colours.
     private func readEntry(accent: CoveAccent) -> CoveEntry {
-        let context = ModelContext(CoveStore.shared)
+        // No store is a rack with nothing on it, not a crash. `CoveStore.shared`
+        // traps by design — the app is the shelf and cannot run without one —
+        // but this process is rebuilt on someone else's schedule and has no user
+        // to tell, so a trap here is a widget that stays blank until it is
+        // removed. Showing the empty rack is the honest answer.
+        guard let container = CoveStore.available else {
+            return CoveEntry(date: .now, accent: accent, items: [], total: 0, todayCount: 0)
+        }
+        let context = ModelContext(container)
 
         var recent = FetchDescriptor<ShelfItem>(
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
@@ -503,7 +577,7 @@ struct CoveProvider: AppIntentTimelineProvider {
                     linkHost: $0.linkHost,
                     linkTitle: $0.linkTitle,
                     userNote: $0.userNote,
-                    imageData: $0.imageData,
+                    thumbnailData: $0.thumbnailData,
                     createdAt: $0.createdAt
                 )
             },
@@ -586,7 +660,7 @@ private struct PassFace: View {
                 // makes a pass recognisable in one glance, before a word of it
                 // is read.
                 Group {
-                    if let data = snapshot.imageData, let image = NSImage(data: data) {
+                    if let data = snapshot.thumbnailData, let image = NSImage(data: data) {
                         Color.clear
                             .overlay { Image(nsImage: image).resizable().scaledToFill() }
                             .clipped()
@@ -629,7 +703,7 @@ private struct PassFace: View {
                 .padding(.top, 9)
 
             HStack(alignment: .bottom, spacing: 8) {
-                fact("saved", shortAge(snapshot.createdAt))
+                savedFact
                 Spacer(minLength: 0)
                 fact("kind", snapshot.kind.label, alignment: .trailing)
             }
@@ -644,6 +718,31 @@ private struct PassFace: View {
             .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
             .foregroundStyle(accent.ink(0.35))
             .frame(height: 1)
+    }
+
+    /// How long ago the capture landed, kept true without a timeline reload.
+    ///
+    /// This was `shortAge(_:)` printed as a string, which was a lie with a
+    /// one-hour half-life: the widget rebuilds hourly at best, so a card stamped
+    /// "16H" went on saying 16H well into the next day, and a capture saved
+    /// seconds ago said "NOW" for an hour. `Text(_:style: .relative)` hands the
+    /// date to the system, which re-renders the tile as the number changes and
+    /// costs no refresh budget.
+    ///
+    /// `shortAge` stays for the accessibility label, where a self-updating view
+    /// is not what is wanted and a phrase is.
+    private var savedFact: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Micro(text: "saved", size: 6, opacity: 0.58)
+            Text(snapshot.createdAt, style: .relative)
+                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                .textCase(.uppercase)
+                .foregroundStyle(accent.ink)
+                .lineLimit(1)
+                // Relative time is words, not the two characters "16H" was, and
+                // "1 MINUTE, 12 SECONDS" is the widest a stub ever has to hold.
+                .minimumScaleFactor(0.5)
+        }
     }
 
     private func fact(
@@ -1071,12 +1170,28 @@ struct CoveWidget: Widget {
         // widget, Edit Widget, pick one of six. The app itself is always Deep
         // Water — this is the only place a colour is chosen.
         //
-        // `kind` is the original, and going back to it is the fix rather than
-        // an oversight. Renaming it was an attempt to dodge a descriptor cache
-        // that turned out not to be the problem, and each rename orphaned every
-        // placed tile — "CoveShelf", "CoveRack", "CovePassRack" and
-        // "CoveTicketRack" are all dead ends with abandoned widgets behind them.
-        // This is the one that was demonstrably serving Edit Widget correctly.
+        // ┌──────────────────────────────────────────────────────────────────┐
+        // │ DO NOT CHANGE `kind`, AND DO NOT RENAME `SelectCoveAccentIntent`. │
+        // └──────────────────────────────────────────────────────────────────┘
+        //
+        // These two strings are not implementation details, they are the
+        // identity of every widget the user has already placed. macOS stores a
+        // placed tile against the pair, and changing either one orphans every
+        // existing tile and drops "Edit Widget" from its menu — the tile keeps
+        // drawing, so it looks like the edit option "disappeared for no reason"
+        // rather than like a rename.
+        //
+        // That has now happened four times. "CoveShelf", "CoveRack",
+        // "CovePassRack" and "CoveTicketRack" are all dead ends with abandoned
+        // widgets behind them, each one an attempt to dodge a descriptor cache
+        // that was never the problem. "CoveWidget" is the original and the one
+        // that demonstrably served Edit Widget. It stays.
+        //
+        // The renaming instinct is the trap: when the edit option is missing,
+        // the cause is almost never the name. It is a stale chronod cache or a
+        // tile placed before the widget became configurable, and both are fixed
+        // by removing the tile and adding it again — which costs nothing,
+        // unlike a rename, which orphans every *other* tile as well.
         AppIntentConfiguration(
             kind: "CoveWidget",
             intent: SelectCoveAccentIntent.self,

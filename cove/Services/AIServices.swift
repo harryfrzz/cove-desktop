@@ -37,7 +37,8 @@ nonisolated struct AIServices: Sendable {
     let search: any SearchService
 
     /// What Cove runs today: Vision OCR, MobileCLIP embeddings, local
-    /// heuristics for enrichment, keyword search.
+    /// heuristics for enrichment, and search that uses those embeddings when
+    /// they are installed.
     ///
     /// Resolved on every read rather than cached in a `let`. Encoders can be
     /// installed or removed from Settings while the app is running, and a stack
@@ -46,13 +47,21 @@ nonisolated struct AIServices: Sendable {
     /// removing them. The three services below are empty structs; building them
     /// again costs nothing worth caching.
     static var local: AIServices {
-        AIServices(
-            embeddings: MobileCLIPEmbeddingService.isInstalled()
-                ? MobileCLIPEmbeddingService.shared
-                : nil,
+        let embeddings: (any EmbeddingService)? = MobileCLIPEmbeddingService.isInstalled()
+            ? MobileCLIPEmbeddingService.shared
+            : nil
+
+        return AIServices(
+            embeddings: embeddings,
             ocr: VisionOCRService(),
             enrichment: LocalEnrichmentService(),
-            search: KeywordSearchService()
+            // Derived from the same answer rather than decided separately: the
+            // semantic half is only meaningful when there is a text tower to
+            // encode the query with, and a shelf whose vectors were written by
+            // an encoder that has since been removed falls back to keyword
+            // search on its own — which is what Cove did before.
+            search: embeddings.map { SemanticSearchService(embeddings: $0) }
+                ?? KeywordSearchService()
         )
     }
 

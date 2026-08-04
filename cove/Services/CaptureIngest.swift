@@ -18,6 +18,20 @@ enum CaptureIngest {
     /// what a 2048px copy shows identically.
     static let maxPixelSize: CGFloat = 2048
 
+    /// Longest side of the copy the cards are drawn from — see
+    /// `ShelfItem.thumbnailData`.
+    ///
+    /// 320 rather than the 26pt the widget's stamp actually is, because the same
+    /// blob backs the shelf's larger tiles on a Retina display, and a thumbnail
+    /// that has to be regenerated the first time anything shows it bigger is not
+    /// a thumbnail. At this size it is tens of kilobytes.
+    nonisolated static let thumbnailPixelSize: CGFloat = 320
+
+    /// Cards are small and there are a lot of them, so this leans harder on
+    /// compression than the original does. Artefacts that would be obvious at
+    /// full size are invisible at 320px.
+    nonisolated static let thumbnailCompression: CGFloat = 0.7
+
     /// Pasteboard types Cove accepts. Registered by the island's container
     /// view, which is what a drag actually lands on.
     static let acceptedPasteboardTypes: [NSPasteboard.PasteboardType] = [
@@ -202,6 +216,11 @@ enum CaptureIngest {
             kind: kind,
             title: title ?? "Image · \(Date.now.formatted(date: .abbreviated, time: .shortened))",
             imageData: data,
+            // Made here, from the bitmap already in hand, rather than left for
+            // the pipeline. A capture is on a card the instant it lands, and the
+            // pipeline is a queue — a thumbnail produced there would arrive
+            // after the first thing that needed it.
+            thumbnailData: image.thumbnailJPEGData(),
             sourceIdentifier: sourceIdentifier,
             sourceApp: sourceApp
         )
@@ -257,10 +276,24 @@ enum CaptureIngest {
 }
 
 extension NSImage {
+    /// The card-sized copy. One name for it, so the size and quality are
+    /// decided in `CaptureIngest` and not at each call site.
+    ///
+    /// `nonisolated`, like the downscale under it, so the pipeline can backfill
+    /// old captures on its own actor. Main-actor-isolated, every backfilled
+    /// thumbnail would be decoded and redrawn on the thread that also draws the
+    /// island.
+    nonisolated func thumbnailJPEGData() -> Data? {
+        downscaledJPEGData(
+            maxPixelSize: CaptureIngest.thumbnailPixelSize,
+            compression: CaptureIngest.thumbnailCompression
+        )
+    }
+
     /// JPEG bytes with the longest side capped, drawn once through a bitmap
     /// context so the result is a real downscale rather than a large image with
     /// a small `size`.
-    func downscaledJPEGData(maxPixelSize: CGFloat, compression: CGFloat = 0.86) -> Data? {
+    nonisolated func downscaledJPEGData(maxPixelSize: CGFloat, compression: CGFloat = 0.86) -> Data? {
         guard let source = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return nil
         }

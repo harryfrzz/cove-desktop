@@ -65,6 +65,12 @@ enum CoveAccentChoice: String, AppEnum {
 
 /// What "Edit Widget" edits.
 ///
+/// **The name of this type is load-bearing — do not rename it.** It is the
+/// identifier macOS stores against every widget the user has already placed,
+/// alongside the widget's `kind`. Renaming it silently orphans those tiles:
+/// they keep drawing, and "Edit Widget" quietly stops being offered on them.
+/// See the frozen-identity note in `CoveWidget.swift`.
+///
 /// The colour belongs to the tile, not to the app: two Cove widgets on one
 /// desktop can be two different colours, and the app itself is always Deep
 /// Water. That is the whole reason this exists rather than a setting.

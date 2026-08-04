@@ -44,6 +44,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 #endif
 
+        // Every placed tile, redrawn from the current shelf.
+        //
+        // Widgets are refreshed when something is captured and otherwise once
+        // an hour, which leaves one gap with no way out of it: a tile showing
+        // its *placeholder* — the greyed-out sample state — is not waiting on a
+        // timer, it is waiting for someone to ask for a timeline, and nothing
+        // was. A tile could sit like that until the next capture, which for a
+        // shelf being read rather than added to is a long time. It reads as the
+        // widget having simply stopped working, and it is the shape every
+        // widget problem in this project has eventually taken.
+        //
+        // Launching the app is the one moment Cove knows the user is present
+        // and interested, and a reload costs a single timeline build per tile.
+        WidgetCenter.shared.reloadAllTimelines()
+
         Task {
             // Recover items stranded mid-processing by a kill, and re-index
             // anything embedded by an older model version.
@@ -69,23 +84,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// Debug only. A release build is installed once, in a stable place, and
     /// registers itself the ordinary way.
+    ///
+    /// **Only when it is actually missing**, and that condition is the whole
+    /// point of this function rather than a refinement of it.
+    ///
+    /// `pluginkit -a` is not idempotent. Adding an extension that PlugInKit
+    /// already knows does not confirm the existing registration, it replaces
+    /// it — new UUID, new timestamp, every time. Measured on a plain relaunch
+    /// with no rebuild at all:
+    ///
+    ///     before  UUID = 36AE1284-8D97-46EC-8A0A-1C954C7E17DC
+    ///     after   UUID = EE99885B-F9C9-4B52-BDA6-6244AA9D298D
+    ///
+    /// chronod binds a *placed* tile to that identity. So every launch of Cove
+    /// orphaned every widget on the desktop: the tile kept drawing from its
+    /// cached timeline, "Edit Widget" quietly stopped being offered, and the
+    /// next redraw fell back to the greyed-out placeholder. It looked exactly
+    /// like the widget breaking whenever the code changed — and the code had
+    /// nothing to do with it. Running the app was enough.
+    ///
+    /// This cost four renames of `kind` chasing a cache that was never the
+    /// problem. The registration was being thrown away on launch, and the one
+    /// thing guaranteed to follow a rebuild is a launch.
     private func registerWidgetForDevelopment() {
         let appex = Bundle.main.bundleURL
             .appending(path: "Contents/PlugIns/CoveWidgetExtension.appex")
         guard FileManager.default.fileExists(atPath: appex.path) else { return }
 
         Task.detached(priority: .background) {
-            func pluginkit(_ arguments: [String]) {
+            @Sendable func pluginkit(_ arguments: [String]) -> String {
                 let process = Process()
                 process.executableURL = URL(filePath: "/usr/bin/pluginkit")
                 process.arguments = arguments
-                process.standardOutput = FileHandle.nullDevice
+                let output = Pipe()
+                process.standardOutput = output
                 process.standardError = FileHandle.nullDevice
-                try? process.run()
+                guard (try? process.run()) != nil else { return "" }
+                // Read before waiting: a full pipe buffer with nobody draining
+                // it is how this deadlocks.
+                let data = output.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
+                return String(decoding: data, as: UTF8.self)
             }
-            pluginkit(["-a", appex.path])
-            pluginkit(["-e", "use", "-i", "com.loop.cove.CoveWidget"])
+
+            // Any registration at all — deliberately not "a registration
+            // pointing at *this* build".
+            //
+            // Two things depend on that. The first is the bug above: matching on
+            // this build's path means a development launch re-adds itself every
+            // time and reissues the identity. The second is the installed copy.
+            // Cove in /Applications is not replaced on every build, so it is the
+            // one that can hold a stable widget identity, and a debug launch
+            // that registered DerivedData over it would take the desktop's tiles
+            // back to breaking on every rebuild.
+            //
+            // So whoever registered first keeps it, and a development build is
+            // only ever the fallback for a Mac with no installed copy.
+            let existing = pluginkit(["-m", "-i", "com.loop.cove.CoveWidget", "-vvv"])
+            guard !existing.contains("com.loop.cove.CoveWidget") else { return }
+
+            _ = pluginkit(["-a", appex.path])
+            _ = pluginkit(["-e", "use", "-i", "com.loop.cove.CoveWidget"])
         }
     }
 #endif
