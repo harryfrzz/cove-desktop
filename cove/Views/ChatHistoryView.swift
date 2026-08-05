@@ -155,17 +155,11 @@ struct ChatHistoryScreen: View {
             transcript
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Only when there is a model to answer, on the same reasoning as the
-            // island's bar: a control that takes a question and can do nothing
-            // with it should not be offered. What was already said stays
-            // readable above — the transcript is worth keeping either way.
-            if assistant.isReady {
-                Divider()
+            Divider()
 
-                promptBar
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 14)
-            }
+            promptBar
+                .padding(.horizontal, 22)
+                .padding(.vertical, 14)
         }
     }
 
@@ -223,12 +217,15 @@ struct ChatHistoryScreen: View {
         .padding(24)
     }
 
+    /// Says what asking will actually do, which is not the same on every Mac.
+    /// Without the model there is still a search behind the bar, so this names
+    /// the reduced thing rather than reading as an apology for a dead control.
     private var prompt: String {
         switch assistant.readiness {
         case .ready:
             "Ask Cove something below. It is kept here and on the island."
         case .unavailable(let reason):
-            reason
+            "\(reason) You can still search your shelf from the bar below."
         }
     }
 
@@ -267,7 +264,7 @@ struct ChatHistoryScreen: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(CoveTheme.accent)
 
-            TextField("Ask Cove…", text: $draft)
+            TextField(assistant.isReady ? "Ask Cove…" : "Search your shelf…", text: $draft)
                 .textFieldStyle(.plain)
                 .font(.body)
                 .focused($isPromptFocused)

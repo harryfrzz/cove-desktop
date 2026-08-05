@@ -142,11 +142,16 @@ struct HomePanel: View {
             // the other two are for reading what is already there, and on a
             // panel this short the bar's height is the difference between three
             // visible rows and five.
-            // …and only when there is a model to answer. A prompt bar with
-            // nothing behind it is a control that takes a question and cannot
-            // do anything with it, which is what this used to be: it shimmered,
-            // then replied that it wasn't wired up. Better to not offer it.
-            if page == .home, assistant.isReady {
+            //
+            // Shown whether or not Apple Intelligence is set up. This was gated
+            // on the model for a while, on the reasoning that a bar which cannot
+            // answer should not be offered — but that was measuring the wrong
+            // thing. Search is a separate local stack, so without the model the
+            // bar still finds what was asked for and says what it found; the
+            // reply loses its prose, not its substance. Hiding it meant a Mac
+            // without Apple Intelligence had no way to ask the shelf anything,
+            // and no way to see why.
+            if page == .home {
                 promptBar
                     .padding(.horizontal, Self.inset)
                     .padding(.bottom, Self.inset)
@@ -254,7 +259,12 @@ struct HomePanel: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(CoveTheme.accent)
 
-            TextField("Ask Cove…", text: $model.promptText)
+            // Names the reduced thing when the model is missing, so the bar does
+            // not promise an answer it will come back from with a list.
+            TextField(
+                assistant.isReady ? "Ask Cove…" : "Search your shelf…",
+                text: $model.promptText
+            )
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(CoveTheme.ink)
