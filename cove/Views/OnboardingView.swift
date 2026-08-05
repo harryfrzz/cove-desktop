@@ -219,7 +219,7 @@ struct OnboardingView: View {
                 Button {
                     Task { await installer.install() }
                 } label: {
-                    Text(installer.hasOverride ? "Download Again (~200 MB)" : "Download a Fresh Copy (~200 MB)")
+                    Text("Setup Embeddings")
                         .font(.callout.weight(.medium))
                         .foregroundStyle(CoveTheme.accent)
                         .padding(.horizontal, 16)
@@ -229,9 +229,13 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.plain)
 
-                Text("Optional — only worth it to repair a bad model.")
+                // The size stays, moved off the button and into the line under
+                // it. A control named for what it does should still say what it
+                // costs before it spends 200 MB of someone's connection.
+                Text("Downloads a fresh copy, about 200 MB. Search already works without it.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
 
             case .measuring:
                 progress(nil, label: "Checking the download size…")
@@ -336,8 +340,6 @@ struct OnboardingView: View {
                 .accessibilityHidden(true)
             }
 
-            accessory()
-
             if let title {
                 Text(title)
                     .font(.title.weight(.semibold))
@@ -351,6 +353,12 @@ struct OnboardingView: View {
                 // Narrow on purpose. A paragraph that runs the full width of a
                 // 960pt window is one the eye loses its place in.
                 .frame(maxWidth: 420)
+
+            // Under the words, not above them. A switch that came first was a
+            // control the page had not yet explained — it asked for a decision
+            // and put the reason for it underneath.
+            accessory()
+                .padding(.top, 6)
 
             Spacer(minLength: 0)
         }
