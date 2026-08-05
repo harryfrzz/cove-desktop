@@ -16,6 +16,16 @@ import SwiftUI
 /// against a panel that is black whatever the system is doing, and lifting it
 /// into a window that follows the appearance would put cream text on white.
 struct ChatHistoryScreen: View {
+    /// A conversation to land on, when the screen was opened to read one
+    /// particular thread rather than to browse them all. Applied once on
+    /// appearance; after that the sidebar is in charge.
+    var opening: UUID?
+    /// Bumped by the window's titlebar to start a conversation. A counter rather
+    /// than a flag because the request is an event: asking twice in a row must
+    /// read as two presses, and a bool set true by one and already true for the
+    /// next would swallow the second.
+    var newChatRequests: Int = 0
+
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ChatThread.updatedAt, order: .reverse) private var threads: [ChatThread]
     /// The shelf, for grounding a question in it. Newest first, and narrowed to
@@ -53,32 +63,28 @@ struct ChatHistoryScreen: View {
                 .frame(maxWidth: .infinity)
         }
         .background(CoveTheme.windowBackground)
+        .onAppear {
+            guard let opening else { return }
+            selection = opening
+            isStartingNew = false
+        }
+        .onChange(of: newChatRequests) { _, _ in startNew() }
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Chats")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Button {
-                    startNew()
-                } label: {
-                    Label("New Chat", systemImage: "square.and.pencil")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.plain)
+            // Just the heading now. Starting a conversation moved to the
+            // titlebar: it acts on the window rather than on the list, and a
+            // control sitting inside the list reads as acting on what is in it.
+            Text("Chats")
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .help("Start a new conversation")
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
 
             ScrollView {
                 LazyVStack(spacing: 4) {
@@ -258,7 +264,12 @@ struct ChatHistoryScreen: View {
             // Short answers should not be stretched across the pane, and long
             // ones should not run the full width of a wide window — either way
             // the eye loses the line it was on.
-            .frame(maxWidth: 460, alignment: .leading)
+            //
+            // Both frames align to the speaker's side, and the inner one is why:
+            // pinned to `.leading` it held a short question against the left of
+            // a 460pt box that the outer frame then pushed right, leaving the
+            // user's bubble stranded mid-pane instead of against the edge.
+            .frame(maxWidth: 460, alignment: isUser ? .trailing : .leading)
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
 

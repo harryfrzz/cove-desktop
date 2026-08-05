@@ -54,6 +54,10 @@ struct OnboardingView: View {
 
     @State private var page: Page = .welcome
     @State private var screenshots = ScreenshotWatcher.shared
+    /// Shared rather than page-owned, so a download started here keeps running
+    /// if the introduction is finished mid-way, and Settings shows it still
+    /// going instead of an idle button.
+    @State private var installer = MobileCLIPInstaller.shared
     /// Held rather than read once, so the Apple Intelligence page follows the
     /// model finishing its download while someone is looking at it.
     @State private var assistant = CoveAssistant.shared
@@ -62,6 +66,7 @@ struct OnboardingView: View {
         case welcome
         case island
         case screenshots
+        case search
         case asking
         case ready
 
@@ -140,14 +145,26 @@ struct OnboardingView: View {
                     .foregroundStyle(.secondary)
             }
 
+        case .search:
+            page(
+                icon: "magnifyingglass",
+                title: "Search reads what you saved",
+                body: """
+                    Cove encodes every capture on this Mac, so a search can reach a \
+                    screenshot that never contained the words you typed. The encoders \
+                    ship with the app and are already working.
+                    """
+            ) {
+                encoderSetup
+            }
+
         case .asking:
             page(
                 icon: "sparkles",
                 title: "Ask Cove what you saved",
                 body: """
-                    Search reads the meaning of a capture, not only its words, so a \
-                    question can reach a screenshot that never contained it. That \
-                    part runs on this Mac and is already on.
+                    Questions go to the same shelf, in sentences rather than search \
+                    terms — and Cove can open what it finds.
                     """
             ) {
                 assistantStatus
@@ -163,6 +180,93 @@ struct OnboardingView: View {
                     """
             )
         }
+    }
+
+    /// The encoders, and the optional download of a fresh pair.
+    ///
+    /// Worded carefully, because the honest version is not the one this control
+    /// implies. Cove ships with working encoders and search is on before anyone
+    /// reads this page — the download fetches a fresh ~200 MB copy from Apple's
+    /// conversions that takes precedence over the bundled one. That is a repair,
+    /// or a way to pick up a newer conversion, and offering it as *setup* would
+    /// tell a first-time user that a feature already working needs 200 MB before
+    /// it does. So the state comes first and the button is plainly optional.
+    @ViewBuilder
+    private var encoderSetup: some View {
+        VStack(spacing: 12) {
+            switch installer.phase {
+            case .idle, .finished, .failed:
+                if case .failed(let reason) = installer.phase {
+                    Text(reason)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                } else if case .finished = installer.phase {
+                    Label("Fresh copy installed", systemImage: "checkmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label(
+                        installer.hasOverride ? "Using a downloaded copy" : "Ready to search",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    Task { await installer.install() }
+                } label: {
+                    Text(installer.hasOverride ? "Download Again (~200 MB)" : "Download a Fresh Copy (~200 MB)")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(CoveTheme.accent)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(CoveTheme.accent.opacity(0.14), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Text("Optional — only worth it to repair a bad model.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+            case .measuring:
+                progress(nil, label: "Checking the download size…")
+
+            case .downloading(let fraction):
+                progress(fraction, label: "Downloading… \(Int(fraction * 100))%")
+
+            case .compiling:
+                // Core ML compilation reports nothing, so neither does this.
+                progress(nil, label: "Compiling for this Mac…")
+
+            case .preparing:
+                progress(nil, label: "Preparing albums…")
+            }
+        }
+        .frame(maxWidth: 360)
+        .animation(.easeInOut(duration: 0.2), value: installer.phase)
+    }
+
+    /// A determinate bar while there are bytes to count and an indeterminate one
+    /// while there are not. Compilation has no fraction to report, and a bar
+    /// frozen at 100% would read as a hang.
+    private func progress(_ fraction: Double?, label: String) -> some View {
+        VStack(spacing: 8) {
+            if let fraction {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 300)
     }
 
     /// Whether the written half of asking is available, and what to do when it

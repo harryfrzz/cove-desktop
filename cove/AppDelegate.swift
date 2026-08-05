@@ -182,6 +182,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.redeem(.importFile) }
         }
+        // Not a widget intent, but it arrives the same way and for the same
+        // reason: the island's views cannot reach the window controller, and
+        // this is where it is owned.
+        centre.addObserver(
+            forName: .coveOpenChat, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let id = note.userInfo?[CoveWindowController.threadIDKey] as? UUID else { return }
+            MainActor.assumeIsolated { self?.windowController.showChat(id) }
+        }
     }
 
     private enum WidgetAction { case paste, open, importFile }

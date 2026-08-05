@@ -15,8 +15,20 @@ import UniformTypeIdentifiers
 /// `NotchController` is: Cove runs as an accessory app, so the window has to be
 /// ordered in and given focus explicitly. Owning the `NSWindow` is what makes
 /// that dependable.
+extension Notification.Name {
+    /// The island asking for one of its conversations to be opened in the
+    /// window. Carries the thread's id under `CoveWindowController.threadIDKey`.
+    ///
+    /// A notification rather than a direct call because the island's SwiftUI
+    /// views have no route to the window controller — it is owned by the app
+    /// delegate, which is where the widget's intents already land.
+    static let coveOpenChat = Notification.Name("cove.openChat")
+}
+
 @MainActor
 final class CoveWindowController: NSObject, NSWindowDelegate {
+    static let threadIDKey = "threadID"
+
     private var window: NSWindow?
     private let model = CoveWindowModel()
 
@@ -38,6 +50,20 @@ final class CoveWindowController: NSObject, NSWindowDelegate {
         if isArriving {
             model.openCount &+= 1
         }
+    }
+
+    /// Opens the window on one conversation.
+    ///
+    /// The island can show a transcript but not hold one: its panel is 460pt
+    /// wide and a reply of any length runs off the bottom of it. This is the way
+    /// out of that — the same thread, in a window with room for it.
+    ///
+    /// Set after `show()` so the value lands on a view that exists. Building the
+    /// window is what creates the hosting view, and a request made before that
+    /// would be observed by nothing.
+    func showChat(_ threadID: UUID) {
+        show()
+        model.pendingChat = threadID
     }
 
     private func build() -> NSWindow {
@@ -84,6 +110,11 @@ private final class CoveWindowModel {
     /// replay its entrance — the window is reused rather than rebuilt, so this
     /// is the only signal that says "you are being looked at again".
     var openCount = 0
+    /// A conversation the window has been asked to open on, from the island.
+    ///
+    /// Cleared once the view has acted on it, so opening the same thread twice
+    /// in a row is two requests rather than one followed by silence.
+    var pendingChat: UUID?
 }
 
 private struct CoveWindowView: View {
@@ -116,6 +147,13 @@ private struct CoveWindowView: View {
     @State private var pendingDelete: [ShelfItem] = []
     @State private var isShowingSettings = false
     @State private var isShowingChats = false
+    /// Which conversation Chats should land on when it opens. Nil when the
+    /// screen was reached by the toolbar, which has no particular thread in
+    /// mind and should show the most recent.
+    @State private var openingChat: UUID?
+    /// Presses of the titlebar's New Chat, counted so the screen can tell two
+    /// apart. See `ChatHistoryScreen.newChatRequests`.
+    @State private var newChatRequests = 0
     /// Whether Cove has introduced itself yet. Shared rather than owned by this
     /// view, so Settings can put the introduction back.
     @State private var onboarding = CoveOnboarding.shared
@@ -168,6 +206,19 @@ private struct CoveWindowView: View {
             // leaves the shelf at rest, ready to pop again next time.
             .task(id: model.openCount) { await playEntrance() }
             .task(id: searchText) { await runSearch() }
+            // The island asking for a conversation. Read and cleared here, so
+            // the request is consumed rather than left standing — otherwise
+            // leaving Chats and coming back would silently reopen the thread the
+            // island last sent.
+            .onChange(of: model.pendingChat) { _, requested in
+                guard let requested else { return }
+                openingChat = requested
+                model.pendingChat = nil
+                // The album is somewhere else the window can be, and arriving
+                // into Chats from underneath it would leave both up.
+                openAlbum = nil
+                withAnimation(.easeOut(duration: 0.2)) { isShowingChats = true }
+            }
             // The window title is the only place a screen names itself, so it
             // follows the screen rather than staying on the app's name.
             .navigationTitle(title)
@@ -261,7 +312,7 @@ private struct CoveWindowView: View {
                 // the way the focus overlay is — it is somewhere else the window
                 // can be, and it draws its own background to say so.
                 if isShowingChats {
-                    ChatHistoryScreen()
+                    ChatHistoryScreen(opening: openingChat, newChatRequests: newChatRequests)
                         .transition(.opacity)
                 }
             }
@@ -315,6 +366,7 @@ private struct CoveWindowView: View {
                     // Refresh that reprocessed every capture from inside a
                     // conversation would be a button with no visible effect and
                     // a long one.
+                    newChatButton
                     settingsButton
                 } else {
                     // Selecting only exists inside an album. On the library
@@ -756,6 +808,20 @@ private struct CoveWindowView: View {
         }
         .disabled(model.isRefreshing)
         .accessibilityHint("Reprocesses the shelf with the current OCR, enrichment, and embedding services")
+    }
+
+    /// Starts a conversation, from the titlebar rather than from the sidebar it
+    /// used to sit in. It acts on the window — which conversation the whole
+    /// screen is showing — and a control inside the list reads as acting on the
+    /// list.
+    private var newChatButton: some View {
+        Button {
+            newChatRequests &+= 1
+        } label: {
+            Label("New Chat", systemImage: "square.and.pencil")
+        }
+        .buttonStyle(.glass)
+        .accessibilityHint("Starts a new conversation with Cove")
     }
 
     private var historyButton: some View {

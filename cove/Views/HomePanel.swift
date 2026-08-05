@@ -681,21 +681,27 @@ private struct ChatHistoryPage: View {
 
     private func transcript(of thread: ChatThread) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                openThread = nil
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text(thread.title.isEmpty ? "Untitled" : thread.title)
-                        .font(.system(size: 11, weight: .semibold))
-                        .lineLimit(1)
+            HStack(spacing: 8) {
+                Button {
+                    openThread = nil
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(CoveTheme.inkSecondary)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(CoveTheme.inkSecondary)
-                .padding(.horizontal, Self.inset)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 4)
+
+                openInAppButton(thread)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, Self.inset)
 
             ScrollView {
                 let turns = thread.orderedTurns
@@ -711,6 +717,42 @@ private struct ChatHistoryPage: View {
             }
             .scrollIndicators(.never)
         }
+    }
+
+    /// The way out of a panel this size.
+    ///
+    /// The island is 460pt wide and the transcript gets a few short rows of it.
+    /// That is the right budget for a glance and the wrong one for an answer
+    /// that ran to a list — which is a shape Cove produces often enough that
+    /// reading one should not mean scrolling a strip under the notch.
+    ///
+    /// Glass rather than the panel's own raised fill: it sits over the
+    /// transcript rather than in it, and the material is what says so.
+    private func openInAppButton(_ thread: ChatThread) -> some View {
+        Button {
+            NotificationCenter.default.post(
+                name: .coveOpenChat,
+                object: nil,
+                userInfo: [CoveWindowController.threadIDKey: thread.id]
+            )
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "macwindow")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("Open in App")
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(CoveTheme.ink)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            // The glass is drawn outside the label, so without this only the
+            // glyph and the words take a click.
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens this conversation in Cove's window, where there is room to read it")
     }
 
     /// The user's turn sits right and tinted, Cove's sits left and plain — the
