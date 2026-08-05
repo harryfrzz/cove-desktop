@@ -181,19 +181,19 @@ final class CoveAssistant {
     /// model put it, unlinked. Cove will not make something clickable on the
     /// strength of the model having typed it.
     private func reply(from text: String, shown: [ShelfItem]) throws -> Reply {
-        var offered = offers.offered
         var prose = text
 
-        // A call the model typed instead of made. See `typedCalls`.
+        // A call the model typed instead of made. See `typedCalls`. Routed
+        // through the same box a real call goes through rather than writing the
+        // ids straight in — otherwise every rule `offer` enforces, including
+        // refusing to hold out the entire shelf at a greeting, is one typed
+        // parenthesis away from being bypassed.
         for (written, numbers) in Self.typedCalls(in: text) {
-            for number in numbers {
-                let index = number - 1
-                guard shown.indices.contains(index) else { continue }
-                let id = shown[index].id
-                if !offered.contains(id) { offered.append(id) }
-            }
+            _ = offers.offer(numbered: numbers)
             prose = prose.replacingOccurrences(of: written, with: "")
         }
+
+        var offered = offers.offered
 
         for (address, item) in Self.savedAddresses(in: text, among: shown) {
             if !offered.contains(item.id) { offered.append(item.id) }
@@ -237,8 +237,11 @@ final class CoveAssistant {
     private static func typedCalls(in text: String) -> [(String, [Int])] {
         // Deliberately case-insensitive on the name: the model has been seen
         // writing both `showCaptures` and `ShowCaptures`.
+        // Permissive inside the brackets, because the model is improvising the
+        // syntax rather than following one: `[2, 3]`, `['1','2','3']` and `[]`
+        // have all come back. Anything that is not a digit is ignored.
         guard let regex = try? NSRegularExpression(
-            pattern: #"\bshowCaptures\s*\(\s*(?:numbers\s*:)?\s*\[([0-9,\s]*)\]\s*\)"#,
+            pattern: #"\bshowCaptures\s*\(\s*(?:numbers\s*:)?\s*\[([^\]]*)\]\s*\)"#,
             options: .caseInsensitive
         ) else { return [] }
 
@@ -249,9 +252,12 @@ final class CoveAssistant {
             else { return nil }
 
             let numbers = text[list]
-                .split(separator: ",")
-                .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
-            guard !numbers.isEmpty else { return nil }
+                .split(whereSeparator: { !$0.isNumber })
+                .compactMap { Int($0) }
+            // Returned even when there are no usable numbers in it. This is the
+            // difference between the user seeing a greeting and seeing the text
+            // "showCaptures([])" — an empty call is still a call, and still has
+            // to come out of the sentence.
             return (String(text[whole]), numbers)
         }
     }
@@ -383,44 +389,104 @@ final class CoveAssistant {
         One or two short sentences. No preamble, no bullet points.
         """
 
-    /// What the model is allowed to read: the search's answer, topped up with
-    /// whatever is most recent.
+    /// What the model is allowed to read: the search's answer, and nothing else.
     ///
-    /// Search alone was not enough, and a saved Korean YouTube video is why.
-    /// Its title is Korean, so an English question touches nothing but the
-    /// host; on a Mac without the encoders there is no semantic bridge either.
-    /// The search returned nothing, the model was handed nothing, and it
-    /// truthfully reported that there was no such link — about a shelf that
-    /// had one.
+    /// This used to top a thin result up with whatever was recent, and the
+    /// reason was a saved Korean YouTube video — Korean title, English
+    /// question, so the search touched nothing and the model truthfully
+    /// reported there was no such link about a shelf that had one. Filling the
+    /// space with recent captures fixed that case.
     ///
-    /// So a thin result is filled out with recent captures. On a small shelf
-    /// that means the model simply sees the shelf, which is the right answer
-    /// for a question like "what was that video?" — and it can read the Korean
-    /// title perfectly well once it is actually looking at it.
+    /// It also meant every message arrived with a list of the user's shelf
+    /// attached, including the ones that were not questions. Typing "hi" got
+    /// back four links and a summary of their captures, because a greeting plus
+    /// a visible list is all it takes for a model this size to start reading the
+    /// list out. Blocking the links alone was not enough — the prose listed them
+    /// too. Nothing to see is the only reliable way to have nothing said.
     ///
-    /// `matches` keeps its order and its priority; the top-up only ever fills
-    /// the space underneath.
-    func grounding(matches: [ShelfItem], recent: [ShelfItem]) -> [ShelfItem] {
-        var chosen = Array(matches.prefix(Self.groundingLimit))
-        guard chosen.count < Self.groundingLimit else { return chosen }
-
-        var seen = Set(chosen.map(\.id))
-        for item in recent where !seen.contains(item.id) {
-            chosen.append(item)
-            seen.insert(item.id)
-            if chosen.count == Self.groundingLimit { break }
-        }
-        return chosen
+    /// The original bug is covered elsewhere now: the address is part of
+    /// `searchableText`, so the Korean video matches on "youtube" through its
+    /// own URL, and above a dozen captures the vector half reaches it without
+    /// sharing a word at all. A lookup that still finds nothing is answered with
+    /// "I couldn't find that", which is honest, and the user's next message is
+    /// usually specific enough to match.
+    ///
+    /// So the fallback is kept, and what changed is *when* it fires. A message
+    /// that is only hello, or thanks, or how are you, is not a lookup that
+    /// missed — it is not a lookup — and it gets no captures. Anything else that
+    /// finds nothing still gets the recent ones, because "what was that video I
+    /// saved" deserves a better answer than a shrug.
+    ///
+    /// A match is never topped up any more, though. Filling the space under two
+    /// real results with three unrelated ones only gave the model three more
+    /// things it might hold out by mistake.
+    func grounding(for question: String, matches: [ShelfItem], recent: [ShelfItem]) -> [ShelfItem] {
+        let found = Array(matches.prefix(Self.groundingLimit))
+        guard found.isEmpty else { return found }
+        guard !Self.isSmallTalk(question) else { return [] }
+        return Array(recent.prefix(Self.groundingLimit))
     }
 
-    /// The question, with the shelf attached.
+    /// Whether the message is conversation rather than a question about the
+    /// shelf.
     ///
-    /// The heading is not decoration. When the search found these, they are
-    /// what was asked for; when they are only what is recent, saying so is what
-    /// stops "hii" being answered with a summary of the user's files. The model
-    /// is told which it is holding and behaves accordingly.
+    /// Deliberately a closed list and a strict test — *every* word has to be in
+    /// it — so the failure it can have is letting a greeting through as a
+    /// lookup, never turning a lookup into a greeting. One unrecognised word is
+    /// enough to treat the message as a question, which is the side worth
+    /// failing on: the cost is a few recent captures the model was told not to
+    /// mention, and the cost of the other side is being unable to find anything.
+    private static func isSmallTalk(_ question: String) -> Bool {
+        let words = question
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+
+        // Nothing but punctuation. Not a lookup either.
+        guard !words.isEmpty else { return true }
+        return words.allSatisfy { conversational.contains($0) }
+    }
+
+    /// Greetings, courtesies, and the function words that keep them company.
+    /// Nothing here names anything that could be on a shelf.
+    private static let conversational: Set<String> = [
+        "hi", "hii", "hiii", "hey", "heya", "hello", "helo", "yo", "sup",
+        "hola", "namaste", "morning", "afternoon", "evening", "night", "good",
+        "thanks", "thank", "thankyou", "thx", "ty", "cheers", "welcome",
+        "please", "sorry", "bye", "goodbye", "later", "ok", "okay", "kk",
+        "cool", "nice", "great", "awesome", "lol", "haha", "hmm", "yes", "yeah",
+        "yep", "yup", "no", "nope", "nah", "sure", "how", "are", "you", "your",
+        "there", "is", "it", "im", "i", "am", "doing", "today", "day", "up",
+        "whats", "what", "who", "me", "my", "we", "and", "the", "a", "to", "do"
+    ]
+
+    /// The question, with the shelf attached — or, when nothing matched, with
+    /// an explanation of why there is no shelf attached.
+    ///
+    /// The empty case needs its own framing rather than passing the message
+    /// through bare. Sent on its own, "hi" came back as nothing at all: the
+    /// instructions are mostly about captures, and a model given a greeting and
+    /// no context to reply to has nothing to be. Naming the speaker and asking
+    /// for a reply is what turns text into a conversation, and both branches
+    /// need it.
+    ///
+    /// It also has to cover two different silences — a greeting, which never had
+    /// an answer on the shelf, and a lookup that genuinely missed — so it says
+    /// what happened and lets the model tell them apart.
     private static func prompt(question: String, items: [ShelfItem], matched: Bool) -> String {
-        guard !items.isEmpty else { return question }
+        guard !items.isEmpty else {
+            return """
+                Nothing on the user's shelf matched this message.
+
+                The user says: "\(question)"
+
+                Reply to them. If they were asking about something they saved, \
+                say plainly that you could not find it. Otherwise just talk to \
+                them — do not mention their shelf at all.
+
+                There is nothing to show, so do not call showCaptures.
+                """
+        }
 
         let captures = items.prefix(groundingLimit).enumerated().map { index, item in
             described(item, number: index + 1)
@@ -637,7 +703,14 @@ struct ShowCapturesTool: Tool {
             )
         }
         guard !lines.isEmpty else {
-            return "None of those numbers are on the list you were shown, so nothing is on screen."
+            // Either the numbers were not on the list, or they were all of it.
+            // The model does not need to know which — it needs to know that
+            // nothing is on screen, so that it answers in words instead of
+            // describing links the user cannot see.
+            return """
+                Nothing is on screen. Reply in words only, and do not tell the \
+                user to click or open anything.
+                """
         }
         return lines.joined(separator: " ")
     }

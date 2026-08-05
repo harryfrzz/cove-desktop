@@ -64,9 +64,10 @@ enum CoveChat {
         // contained its words.
         let matches = (try? await AIServices.current.search.search(question, in: items)) ?? []
         let assistant = CoveAssistant.shared
-        // Topped up with what is recent when the search came back thin, so the
-        // model is never asked about a shelf it cannot see.
-        let grounding = assistant.grounding(matches: matches, recent: items)
+        // Falls back to what is recent when a *question* finds nothing, so the
+        // model is never asked about a shelf it cannot see — and to nothing at
+        // all when the message was never a question.
+        let grounding = assistant.grounding(for: question, matches: matches, recent: items)
 
         do {
             return try await assistant.answer(

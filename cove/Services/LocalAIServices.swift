@@ -124,8 +124,14 @@ nonisolated struct KeywordSearchService: SearchService {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return items }
 
+        // Nothing searchable in it — "?", "!!", an emoji on its own. No item
+        // answers that, and the whole shelf is the one answer that must not
+        // come back: it is indistinguishable from a search that matched
+        // everything, and the assistant would be told these are what the user
+        // asked for. Only a genuinely *empty* query means "show me everything",
+        // and that is the guard above.
         let terms = Self.terms(in: trimmed)
-        guard !terms.isEmpty else { return items }
+        guard !terms.isEmpty else { return [] }
 
         return items
             .compactMap { item -> (item: ShelfItem, score: Int)? in
@@ -183,9 +189,15 @@ nonisolated struct KeywordSearchService: SearchService {
     /// walk at the weekend" ranked by how many of "to", "at" and "the" a capture
     /// contained. On a 25-capture shelf that query returned 24 of them.
     ///
-    /// The fallback matters as much as the filter: if everything typed was a
-    /// stop word, they are put back. Someone searching for "the" on a shelf of
-    /// film titles means it.
+    /// The fallback is narrower than it looks, and has to be. Putting every stop
+    /// word back whenever nothing survived meant "how are you" searched for
+    /// *how*, *are* and *you* — which matched "**How** to make tonkotsu ramen"
+    /// and "**you**tube.com", so asking the island how it was doing returned
+    /// three links.
+    ///
+    /// One word typed on its own is still honoured: someone searching "the" on
+    /// a shelf of film titles means it. A whole phrase of nothing but stop words
+    /// is conversation, and matches nothing.
     static func terms(in query: String) -> [String] {
         let all = query
             .lowercased()
@@ -193,7 +205,8 @@ nonisolated struct KeywordSearchService: SearchService {
             .map(String.init)
 
         let meaningful = all.filter { $0.count > 2 && !stopWords.contains($0) }
-        return meaningful.isEmpty ? all : meaningful
+        guard meaningful.isEmpty else { return meaningful }
+        return all.count == 1 ? all : []
     }
 
     /// One item's searchable text, split into words.
@@ -247,8 +260,18 @@ nonisolated struct KeywordSearchService: SearchService {
             return score
         }
 
+        /// A term matches a word it starts — but only once it is long enough to
+        /// mean something.
+        ///
+        /// Prefix matching is what lets "hill" find "hills" and "youtub" find
+        /// "youtube". At one or two letters it stops being tolerance and becomes
+        /// a wildcard: "hi" matched *hi*king, and typing hello at the island
+        /// came back with the shelf instead of a greeting. Short terms have to
+        /// be the whole word.
         private static func hit(_ term: String, _ words: [String]) -> Bool {
-            words.contains { $0.hasPrefix(term) }
+            term.count <= 2
+                ? words.contains(term)
+                : words.contains { $0.hasPrefix(term) }
         }
 
         private static func words(_ value: String?) -> [String] {
