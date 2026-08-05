@@ -103,15 +103,16 @@ struct OnboardingView: View {
                 body: """
                     A shelf for the things you are keeping for later — screenshots, \
                     links, notes and files. Everything stays on this Mac.
-                    """
-            ) {
-                OnboardingMark {
-                    Text("Cove")
-                        .font(.system(size: 64, weight: .semibold, design: .serif))
-                        .foregroundStyle(.primary)
+                    """,
+                mark: {
+                    OnboardingMark {
+                        Text("Cove")
+                            .font(.system(size: 64, weight: .semibold, design: .serif))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.bottom, 4)
                 }
-                .padding(.bottom, 4)
-            }
+            )
 
         case .island:
             page(
@@ -132,20 +133,21 @@ struct OnboardingView: View {
                     Cove can watch the folder macOS saves screenshots to and offer \
                     each new one on the island, so keeping it is one click and \
                     ignoring it costs nothing.
-                    """
-            ) {
-                Toggle("Offer new screenshots", isOn: $screenshots.isEnabled)
-                    .toggleStyle(.switch)
-                    .font(.body.weight(.medium))
+                    """,
+                accessory: {
+                    Toggle("Offer new screenshots", isOn: $screenshots.isEnabled)
+                        .toggleStyle(.switch)
+                        .font(.body.weight(.medium))
 
-                // Said before the system asks rather than after. macOS will put
-                // up its own permission sheet the first time the folder is read,
-                // and a prompt that arrives with no explanation is the one people
-                // deny.
-                Text("macOS will ask for access to the folder the first time.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+                    // Said before the system asks rather than after. macOS will
+                    // put up its own permission sheet the first time the folder
+                    // is read, and a prompt that arrives with no explanation is
+                    // the one people deny.
+                    Text("macOS will ask for access to the folder the first time.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            )
 
         case .search:
             page(
@@ -155,10 +157,9 @@ struct OnboardingView: View {
                     Cove encodes every capture on this Mac, so a search can reach a \
                     screenshot that never contained the words you typed. The encoders \
                     ship with the app and are already working.
-                    """
-            ) {
-                encoderSetup
-            }
+                    """,
+                accessory: { encoderSetup }
+            )
 
         case .asking:
             page(
@@ -167,10 +168,9 @@ struct OnboardingView: View {
                 body: """
                     Questions go to the same shelf, in sentences rather than search \
                     terms — and Cove can open what it finds.
-                    """
-            ) {
-                assistantStatus
-            }
+                    """,
+                accessory: { assistantStatus }
+            )
 
         case .ready:
             page(
@@ -319,17 +319,25 @@ struct OnboardingView: View {
         }
     }
 
-    /// One page's furniture, so five pages cannot drift apart in spacing or
-    /// type. `accessory` is whatever that page hands over — a switch, a status,
-    /// or nothing.
-    private func page<Accessory: View>(
+    /// One page's furniture, so six pages cannot drift apart in spacing or type.
+    ///
+    /// Two slots, and the distinction is what a page leads with versus what it
+    /// asks for. `mark` stands where the glyph does, at the top — it is the
+    /// page's own image of itself. `accessory` is whatever the page hands over,
+    /// a switch or a status, and belongs under the words that explain it.
+    /// Putting the wordmark through the second one buried it beneath its own
+    /// description.
+    private func page<Mark: View, Accessory: View>(
         icon: String?,
         title: String?,
         body text: String,
+        @ViewBuilder mark: () -> Mark = { EmptyView() },
         @ViewBuilder accessory: () -> Accessory = { EmptyView() }
     ) -> some View {
         VStack(spacing: 16) {
             Spacer(minLength: 0)
+
+            mark()
 
             if let icon {
                 OnboardingMark {
