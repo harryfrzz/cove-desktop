@@ -22,6 +22,7 @@ struct SettingsView: View {
     /// Held rather than read once, so the row follows Apple Intelligence
     /// finishing its download while this page is open.
     @State private var assistant = CoveAssistant.shared
+    @State private var onboarding = CoveOnboarding.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,6 +40,7 @@ struct SettingsView: View {
                     shelfSection
                     privacySection
                     updatesSection
+                    introductionSection
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -269,6 +271,26 @@ struct SettingsView: View {
                     ProgressView().controlSize(.small)
                 }
             }
+            .padding(.top, 4)
+        }
+    }
+
+    private var introductionSection: some View {
+        SettingsSection("Introduction") {
+            SettingsRow(
+                "First run",
+                value: onboarding.isFinished ? "Done" : "Showing"
+            )
+
+            // The only way back to it. Everything the introduction sets is on
+            // this page too, so this is for reading what Cove said rather than
+            // for changing anything — which is why it says "Show" and not
+            // "Reset".
+            Button("Show Introduction Again") {
+                onboarding.reset()
+                dismiss()
+            }
+            .disabled(!onboarding.isFinished)
             .padding(.top, 4)
         }
     }

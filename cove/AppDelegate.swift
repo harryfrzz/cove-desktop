@@ -30,6 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
         observeWidgetIntents()
 
+        // A first run has something to say, and the window is the only place it
+        // can say it. Cove is an accessory app with no Dock icon, so without
+        // this the introduction would sit behind a menu bar item the user has
+        // not learned about yet — which is precisely what the introduction is
+        // for telling them.
+        if !CoveOnboarding.shared.isFinished {
+            windowController.show()
+        }
+
 #if DEBUG
         registerWidgetForDevelopment()
 

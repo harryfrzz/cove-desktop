@@ -116,6 +116,9 @@ private struct CoveWindowView: View {
     @State private var pendingDelete: [ShelfItem] = []
     @State private var isShowingSettings = false
     @State private var isShowingChats = false
+    /// Whether Cove has introduced itself yet. Shared rather than owned by this
+    /// view, so Settings can put the introduction back.
+    @State private var onboarding = CoveOnboarding.shared
     /// Narrows the library to one kind of thing. Not persisted: a filter that
     /// outlived the session would hide captures the user knows they saved.
     @State private var filter: ShelfFilter = .all
@@ -205,6 +208,19 @@ private struct CoveWindowView: View {
             } message: {
                 Text("Removed from this Mac for good.")
             }
+            // Above everything, including the toolbar's own reach: on a first
+            // run there is nothing on the shelf to browse and no reason to let
+            // anyone into a window that would only show an empty state. A sheet
+            // was the other option and is the wrong one — sheets are dismissed
+            // by Escape, and an introduction that vanishes on a stray keystroke
+            // is one nobody finishes.
+            .overlay {
+                if !onboarding.isFinished {
+                    OnboardingView(onFinish: onboarding.finish)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.28), value: onboarding.isFinished)
     }
 
     private var title: String {
@@ -279,48 +295,57 @@ private struct CoveWindowView: View {
     /// hierarchy — and their items would stack up.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            // Both the album and the chats are screens the window went into, so
-            // both leave by the same door.
-            if openAlbum != nil || isShowingChats {
-                backButton
-            }
-        }
-
-        ToolbarItemGroup(placement: .primaryAction) {
-            if isShowingChats {
-                // Nothing else on this screen acts on the shelf, and a Refresh
-                // that reprocessed every capture from inside a conversation
-                // would be a button with no visible effect and a long one.
-                settingsButton
-            } else {
-                // Selecting only exists inside an album. On the library screen
-                // the things on show are piles and a pile is not a thing that
-                // can be picked or deleted — offering Select there put the
-                // window in a mode where the only visible targets did nothing.
-                if openAlbum != nil {
-                    if isSelecting && !selection.isEmpty {
-                        Button("Delete", systemImage: "trash") {
-                            pendingDelete = items.filter { selection.contains($0.id) }
-                        }
-                        .tint(.red)
-                        .accessibilityLabel("Delete \(selection.count) selected")
-                    }
-
-                    Button(isSelecting ? "Done" : "Select") {
-                        setSelecting(!isSelecting)
-                    }
-                    .accessibilityHint(
-                        isSelecting
-                            ? "Leaves selection and clears what is picked"
-                            : "Lets you pick several photos to delete at once"
-                    )
-                } else {
-                    refreshButton
+        // The introduction covers the window's content but not its chrome, which
+        // is drawn by AppKit outside the hosting view. Left alone, Settings and
+        // Refresh stay clickable over a modal first run — and Settings is where
+        // the control for replaying that first run lives, which is a loop worth
+        // not offering.
+        if onboarding.isFinished {
+            ToolbarItem(placement: .navigation) {
+                // Both the album and the chats are screens the window went into,
+                // so both leave by the same door.
+                if openAlbum != nil || isShowingChats {
+                    backButton
                 }
+            }
 
-                historyButton
-                settingsButton
+            ToolbarItemGroup(placement: .primaryAction) {
+                if isShowingChats {
+                    // Nothing else on this screen acts on the shelf, and a
+                    // Refresh that reprocessed every capture from inside a
+                    // conversation would be a button with no visible effect and
+                    // a long one.
+                    settingsButton
+                } else {
+                    // Selecting only exists inside an album. On the library
+                    // screen the things on show are piles and a pile is not a
+                    // thing that can be picked or deleted — offering Select
+                    // there put the window in a mode where the only visible
+                    // targets did nothing.
+                    if openAlbum != nil {
+                        if isSelecting && !selection.isEmpty {
+                            Button("Delete", systemImage: "trash") {
+                                pendingDelete = items.filter { selection.contains($0.id) }
+                            }
+                            .tint(.red)
+                            .accessibilityLabel("Delete \(selection.count) selected")
+                        }
+
+                        Button(isSelecting ? "Done" : "Select") {
+                            setSelecting(!isSelecting)
+                        }
+                        .accessibilityHint(
+                            isSelecting
+                                ? "Leaves selection and clears what is picked"
+                                : "Lets you pick several photos to delete at once"
+                        )
+                    } else {
+                        refreshButton
+                    }
+
+                    historyButton
+                    settingsButton
+                }
             }
         }
     }
