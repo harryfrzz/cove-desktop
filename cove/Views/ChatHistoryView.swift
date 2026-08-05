@@ -237,26 +237,39 @@ struct ChatHistoryScreen: View {
     /// what.
     private func bubble(_ turn: ChatTurn) -> some View {
         let isUser = turn.role == .user
+        let links = CaptureLinks.resolve(turn.linkedItemIDs, in: items)
 
-        return Text(turn.text)
-            .font(.body)
-            // Asked for rather than picked. Which of cream or black reads on the
-            // user's bubble depends on which of the six accents is selected. The
-            // other side takes the system's label colour, which is what makes it
-            // readable in both appearances.
-            .foregroundStyle(isUser ? AnyShapeStyle(CoveTheme.onAccent) : AnyShapeStyle(.primary))
-            .textSelection(.enabled)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(.primary.opacity(0.07)),
-                in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-            )
-            // Short answers should not be stretched across the pane, and long
-            // ones should not run the full width of a wide window — either way
-            // the eye loses the line it was on.
-            .frame(maxWidth: 460, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        return VStack(alignment: .leading, spacing: 9) {
+            if !turn.text.isEmpty {
+                Text(turn.text)
+                    .font(.body)
+                    // Asked for rather than picked. Which of cream or black
+                    // reads on the user's bubble depends on which of the six
+                    // accents is selected. The other side takes the system's
+                    // label colour, which is what makes it readable in both
+                    // appearances.
+                    .foregroundStyle(isUser ? AnyShapeStyle(CoveTheme.onAccent) : AnyShapeStyle(.primary))
+                    .textSelection(.enabled)
+            }
+
+            // What the answer was holding out, still there to be taken. Cove
+            // does not open a saved link for you — it hands it over, here and
+            // on the island, and the click is yours.
+            ForEach(links) { item in
+                WindowCaptureLink(item: item)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(.primary.opacity(0.07)),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+        )
+        // Short answers should not be stretched across the pane, and long ones
+        // should not run the full width of a wide window — either way the eye
+        // loses the line it was on.
+        .frame(maxWidth: 460, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
 
     // MARK: - Asking

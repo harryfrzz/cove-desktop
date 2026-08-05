@@ -18,6 +18,9 @@ enum CoveChat {
     struct Exchange {
         let thread: ChatThread
         let reply: String
+        /// The captures Cove is holding out for the user to pick from, by shelf
+        /// id. Empty for most turns; a lookup is where they come from.
+        let links: [UUID]
     }
 
     /// Asks the on-device model, grounded in the captures that best match the
@@ -44,13 +47,17 @@ enum CoveChat {
 
         return Exchange(
             thread: record(cleaned, reply: reply, in: thread, context: context),
-            reply: reply
+            reply: reply.text,
+            links: reply.offered
         )
     }
 
     /// Retrieval, then the model. Split out because it is the half with no
     /// store in it: nothing is written until there is something to write.
-    private static func answer(to question: String, shelf items: [ShelfItem]) async -> String {
+    private static func answer(
+        to question: String,
+        shelf items: [ShelfItem]
+    ) async -> CoveAssistant.Reply {
         // Retrieval first, so the model reads the shelf rather than improvising
         // about it. This is the same search the library runs, which since the
         // embeddings landed means a question can reach a capture that never
@@ -69,14 +76,15 @@ enum CoveChat {
             )
         } catch {
             // Said in Cove's voice, and true: no answer was produced. The one
-            // thing it must not do is read like one.
-            return error.localizedDescription
+            // thing it must not do is read like one — and it offers nothing,
+            // because nothing was found.
+            return CoveAssistant.Reply(text: error.localizedDescription, offered: [])
         }
     }
 
     private static func record(
         _ question: String,
-        reply: String,
+        reply: CoveAssistant.Reply,
         in thread: ChatThread?,
         context: ModelContext
     ) -> ChatThread {
@@ -89,7 +97,7 @@ enum CoveChat {
         }
 
         context.insert(target.append(role: .user, text: question))
-        context.insert(target.append(role: .assistant, text: reply))
+        context.insert(target.append(role: .assistant, text: reply.text, links: reply.offered))
         try? context.save()
 
         return target
