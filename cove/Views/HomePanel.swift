@@ -29,12 +29,6 @@ struct HomePanel: View {
     /// a conversation from an hour ago. Nothing is lost by clearing it — the
     /// thread is on the Chats page and in the window.
     @State private var askedThreadID: UUID?
-    /// The question currently in flight, shown as the user's bubble until the
-    /// stored turn for it exists. `CoveChat` writes both turns only once there
-    /// is an answer to write — deliberately, so no reply is ever stored before
-    /// it was produced — and a chat that showed nothing until then would leave
-    /// the user's own words off screen for the whole wait.
-    @State private var askingQuestion: String?
     @State private var isThinking = false
     /// Held so the bar appears by itself if Apple Intelligence finishes
     /// downloading while the panel is open.
@@ -93,7 +87,6 @@ struct HomePanel: View {
             // the window.
             guard !isOpen else { return }
             askedThreadID = nil
-            askingQuestion = nil
         }
         .onChange(of: tray.isEmpty) { _, isEmpty in
             // The last thing held has been taken somewhere and its page went
@@ -289,50 +282,46 @@ struct HomePanel: View {
     }
 
     private var hasConversation: Bool {
-        askingQuestion != nil || conversation?.turns.isEmpty == false
+        conversation?.turns.isEmpty == false
     }
 
-    private var storedTurns: [ChatTurn] {
-        conversation?.orderedTurns ?? []
+    /// The turns worth drawing.
+    ///
+    /// Cove's turn is stored empty the moment a question is asked and filled in
+    /// as the answer streams, so the transcript always ends in a turn with no
+    /// text in it for as long as the model is thinking. An empty bubble is not
+    /// a turn anyone can read — `pendingBubble` stands in its place until the
+    /// first words land.
+    private var visibleTurns: [ChatTurn] {
+        (conversation?.orderedTurns ?? []).filter { !$0.text.isEmpty }
     }
 
-    /// The exchange, newest last, with the question in flight and the shimmer
-    /// under it.
+    /// Whether the answer has been asked for and has not begun arriving.
+    private var isAwaitingReply: Bool {
+        isThinking && conversation?.orderedTurns.last?.text.isEmpty != false
+    }
+
+    /// The exchange, newest last, with the shimmer under it until Cove speaks.
     private var liveTranscript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(storedTurns.enumerated()), id: \.element.id) { index, turn in
+                    ForEach(Array(visibleTurns.enumerated()), id: \.element.id) { index, turn in
                         transcriptBubble(
                             turn.text,
                             isUser: turn.role == .user,
-                            // No tail while the next thing on screen continues
-                            // this speaker's run — including the question in
-                            // flight, which the stored turns cannot know about.
-                            hasTail: storedTurns.endsSpeakerRun(at: index)
-                                && !(index == storedTurns.count - 1 && askingQuestion != nil)
+                            // No tail while the shimmer is about to sit under
+                            // this bubble: it continues Cove's side of the
+                            // conversation even though it is not a turn.
+                            hasTail: visibleTurns.endsSpeakerRun(at: index)
+                                && !(index == visibleTurns.count - 1 && isAwaitingReply)
                         )
-                        .padding(.top, storedTurns.spacingBefore(at: index, tight: 2, loose: 8))
+                        .padding(.top, visibleTurns.spacingBefore(at: index, tight: 2, loose: 8))
                         .transition(.coveBubble(isUser: turn.role == .user))
                         .id(turn.id)
                     }
 
-                    // The question, before there is a stored turn for it. It is
-                    // drawn identically and in the same place, so when the real
-                    // one lands this does not move or flicker — it is the same
-                    // bubble as far as anyone looking at it is concerned.
-                    //
-                    // Which is also why this one does not spring: it is replaced
-                    // by the stored turn a moment later, and popping twice for
-                    // one question would give that handover away.
-                    if let askingQuestion {
-                        transcriptBubble(askingQuestion, isUser: true, hasTail: true)
-                            .padding(.top, storedTurns.isEmpty ? 0 : 8)
-                            .transition(.coveBubble(isUser: true))
-                            .id(Self.askingBubbleID)
-                    }
-
-                    if isThinking {
+                    if isAwaitingReply {
                         pendingBubble
                             .padding(.top, 8)
                             .transition(.coveBubble(isUser: false))
@@ -343,28 +332,29 @@ struct HomePanel: View {
                 // The spring the bubbles arrive on. Declared here rather than on
                 // each of them so a question and the answer under it land as one
                 // movement.
-                .animation(Self.bubbleSpring, value: storedTurns.count)
-                .animation(Self.bubbleSpring, value: askingQuestion)
-                .animation(Self.bubbleSpring, value: isThinking)
+                .animation(Self.bubbleSpring, value: visibleTurns.count)
+                .animation(Self.bubbleSpring, value: isAwaitingReply)
+                // Each streamed snapshot makes the reply taller. Without this the
+                // bubble jumps to its new size; with it, it grows.
+                .animation(.easeOut(duration: 0.18), value: visibleTurns.last?.text)
             }
             .scrollIndicators(.never)
             // The last thing said is what the panel is about, and on a surface
             // this short it is off the bottom the moment there are three turns.
-            .onChange(of: storedTurns.count) { _, _ in scrollToEnd(proxy) }
-            .onChange(of: isThinking) { _, _ in scrollToEnd(proxy) }
-            .onChange(of: askingQuestion) { _, _ in scrollToEnd(proxy) }
+            .onChange(of: visibleTurns.count) { _, _ in scrollToEnd(proxy) }
+            .onChange(of: isAwaitingReply) { _, _ in scrollToEnd(proxy) }
+            // A reply that is still growing pushes its own last line out of
+            // sight, so the follow has to happen on every snapshot rather than
+            // once when the turn appeared.
+            .onChange(of: visibleTurns.last?.text) { _, _ in scrollToEnd(proxy) }
             .onAppear { scrollToEnd(proxy) }
         }
     }
 
     private func scrollToEnd(_ proxy: ScrollViewProxy) {
-        let target: AnyHashable? = if isThinking {
-            Self.pendingBubbleID
-        } else if askingQuestion != nil {
-            Self.askingBubbleID
-        } else {
-            storedTurns.last?.id
-        }
+        let target: AnyHashable? = isAwaitingReply
+            ? Self.pendingBubbleID
+            : visibleTurns.last?.id
         guard let target else { return }
         withAnimation(.easeOut(duration: 0.2)) {
             proxy.scrollTo(target, anchor: .bottom)
@@ -418,7 +408,6 @@ struct HomePanel: View {
     private static let bubbleSpring = Animation.spring(response: 0.34, dampingFraction: 0.7)
 
     private static let pendingBubbleID = "cove-pending-answer"
-    private static let askingBubbleID = "cove-asking-question"
 
     // MARK: - Prompt
 
@@ -496,31 +485,18 @@ struct HomePanel: View {
         //
         // Follow-ups within the same opening continue it, because `askedThreadID`
         // is set below and only cleared when the island closes.
-        let thread = conversation
-
-        withAnimation(.easeInOut(duration: 0.2)) {
-            askedThreadID = thread?.id
-            askingQuestion = question
-            isThinking = true
+        guard let exchange = CoveChat.begin(question, in: conversation, context: modelContext) else {
+            return
         }
 
-        Task {
-            let exchange = await CoveChat.ask(
-                question,
-                in: thread,
-                shelf: items,
-                context: modelContext
-            )
+        // Synchronous, so the question is on screen in this frame rather than
+        // several seconds later when the model has finished.
+        askedThreadID = exchange.thread.id
+        isThinking = true
 
-            withAnimation(.easeInOut(duration: 0.2)) {
-                // The stored thread first, so the turns this hands over to are
-                // already on screen when the local question bubble goes. Set the
-                // other way round, the panel would blink back to the mark for a
-                // frame on the first question of a brand-new thread.
-                askedThreadID = exchange?.thread.id ?? askedThreadID
-                askingQuestion = nil
-                isThinking = false
-            }
+        Task {
+            await CoveChat.answer(exchange, to: question, shelf: items, context: modelContext)
+            isThinking = false
         }
     }
 
@@ -721,7 +697,10 @@ private struct ChatHistoryPage: View {
             .padding(.horizontal, Self.inset)
 
             ScrollView {
-                let turns = thread.orderedTurns
+                // Empty turns are Cove's, waiting to be streamed into — or left
+                // behind by a thread that was interrupted mid-answer. Neither is
+                // a bubble worth drawing.
+                let turns = thread.orderedTurns.filter { !$0.text.isEmpty }
 
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in

@@ -14,53 +14,75 @@ import SwiftData
 /// what a thrown answer looks like in a transcript.
 @MainActor
 enum CoveChat {
-    /// A completed turn: where it landed, and what came back.
+    /// An exchange under way: where it landed, and the turn being written into.
     struct Exchange {
         let thread: ChatThread
-        let reply: String
+        /// Cove's turn. Created empty and filled in as the answer arrives, so
+        /// both surfaces watch the store rather than each keeping their own copy
+        /// of a reply in flight.
+        let reply: ChatTurn
     }
 
-    /// Asks the on-device model, grounded in the captures that best match the
-    /// question, and stores both sides in `thread` — starting a new one when
-    /// none is given.
+    /// Stores the question and an empty reply, and returns both.
     ///
-    /// The question is still saved when the answer fails, and the failure is
-    /// saved as the reply. Whatever went wrong with the model, the user typed
-    /// something and the history should show it alongside what it got back.
+    /// Split from answering because the two happen at different times and the
+    /// user should not wait for the second to see the first. This is
+    /// synchronous, so a caller can put the question on screen in the same frame
+    /// the return key was pressed.
     ///
     /// Threads are only made by asking. A "new chat" that inserted an empty
     /// thread the moment it was clicked would fill the history with
     /// conversations nobody had.
-    static func ask(
+    static func begin(
         _ question: String,
         in thread: ChatThread?,
-        shelf items: [ShelfItem],
         context: ModelContext
-    ) async -> Exchange? {
+    ) -> Exchange? {
         let cleaned = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
 
-        let reply = await answer(to: cleaned, in: thread, shelf: items)
+        let target: ChatThread
+        if let thread {
+            target = thread
+        } else {
+            target = ChatThread()
+            context.insert(target)
+        }
 
-        return Exchange(
-            thread: record(cleaned, reply: reply, in: thread, context: context),
-            reply: reply
-        )
+        // Before the new turns land, and that ordering is load-bearing: the
+        // session is rebuilt by replaying the thread's stored turns, so resuming
+        // afterwards would hand the model this very question plus an empty reply
+        // it never gave.
+        let assistant = CoveAssistant.shared
+        if assistant.isReady { assistant.resume(target) }
+
+        context.insert(target.append(role: .user, text: cleaned))
+        let reply = target.append(role: .assistant, text: "")
+        context.insert(reply)
+        try? context.save()
+
+        return Exchange(thread: target, reply: reply)
     }
 
-    /// Retrieval, then the model. Split out because it is the half with no
-    /// store in it: nothing is written until there is something to write.
+    /// Fills in the reply, writing each partial answer straight into the stored
+    /// turn.
     ///
-    /// Retrieval runs first and runs unconditionally, and that ordering is the
-    /// whole reason asking still works on a Mac without Apple Intelligence. The
-    /// two halves are separate stacks — MobileCLIP's encoders and the shelf's
-    /// own index are local files that have nothing to do with Apple's language
-    /// model — so losing the second one costs the prose, not the search.
-    private static func answer(
+    /// Writing to the model object rather than to view state is what makes this
+    /// stream in both places at once: the island and the window both read the
+    /// same thread through `@Query`, so neither needs to know the other exists.
+    /// The context is saved once at the end — the in-memory object is what the
+    /// views observe, and saving on every snapshot would put a disk write in the
+    /// middle of an animation for nothing.
+    ///
+    /// The question stays saved when the answer fails, and the failure is saved
+    /// as the reply. Whatever went wrong, the user typed something and the
+    /// history should show it alongside what it got back.
+    static func answer(
+        _ exchange: Exchange,
         to question: String,
-        in thread: ChatThread?,
-        shelf items: [ShelfItem]
-    ) async -> String {
+        shelf items: [ShelfItem],
+        context: ModelContext
+    ) async {
         // The same search the library runs, which since the embeddings landed
         // means a question can reach a capture that never contained its words:
         // keyword, query-to-text vector and query-to-image vector, fused.
@@ -69,32 +91,30 @@ enum CoveChat {
 
         switch assistant.readiness {
         case .unavailable(let reason):
-            return retrieved(matches, unavailable: reason)
+            exchange.reply.text = retrieved(matches, unavailable: reason)
 
         case .ready:
-            // Point the model at the conversation this question belongs to
-            // before asking it anything. Both surfaces reach the same assistant
-            // and the window can be sitting in any thread, so which transcript
-            // is loaded is decided here rather than left to whatever was asked
-            // last.
-            assistant.resume(thread)
-
             // Topped up with what is recent when the search came back thin, so
             // the model is never asked about a shelf it cannot see.
             let grounding = assistant.grounding(matches: matches, recent: items)
 
             do {
-                return try await assistant.answer(
+                exchange.reply.text = try await assistant.answer(
                     to: question,
                     grounding: grounding,
                     matched: !matches.isEmpty
-                )
+                ) { partial in
+                    exchange.reply.text = partial
+                }
             } catch {
                 // Said in Cove's voice, and true: no answer was produced. The
                 // one thing it must not do is read like one.
-                return error.localizedDescription
+                exchange.reply.text = error.localizedDescription
             }
         }
+
+        exchange.thread.updatedAt = .now
+        try? context.save()
     }
 
     /// What the shelf found, when there is no model to say it in sentences.
@@ -136,25 +156,4 @@ enum CoveChat {
     /// Smaller than the model's grounding limit on purpose: those eight are read
     /// by a model that picks one, these are read by a person.
     private static let retrievalLimit = 5
-
-    private static func record(
-        _ question: String,
-        reply: String,
-        in thread: ChatThread?,
-        context: ModelContext
-    ) -> ChatThread {
-        let target: ChatThread
-        if let thread {
-            target = thread
-        } else {
-            target = ChatThread()
-            context.insert(target)
-        }
-
-        context.insert(target.append(role: .user, text: question))
-        context.insert(target.append(role: .assistant, text: reply))
-        try? context.save()
-
-        return target
-    }
 }

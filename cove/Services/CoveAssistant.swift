@@ -100,10 +100,16 @@ final class CoveAssistant {
     /// distinguish "no answer" from "no model", and a function that always
     /// returns something readable is how the fake reply happened in the first
     /// place.
+    /// `onPartial` receives the answer so far, as often as the model produces
+    /// one. Each call carries the whole answer to that point rather than the
+    /// piece just added, so a caller assigns it and never appends — which is
+    /// also what makes the retry below harmless, since a second attempt simply
+    /// overwrites what the first had shown.
     func answer(
         to question: String,
         grounding items: [ShelfItem],
-        matched: Bool
+        matched: Bool,
+        onPartial: @escaping @MainActor (String) -> Void = { _ in }
     ) async throws -> String {
         guard isReady else { throw AssistantError.noModel }
 
@@ -113,14 +119,14 @@ final class CoveAssistant {
         openTargets.replace(with: Array(items.prefix(Self.groundingLimit)))
 
         do {
-            return try await respond(to: prompt)
+            return try await respond(to: prompt, onPartial: onPartial)
         } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
             // The conversation has outgrown the window. Start a fresh one and
             // answer this turn rather than handing back an error the user can
             // do nothing about — losing the transcript is a smaller loss than
             // an assistant that stops working until relaunch.
             startNewConversation()
-            return try await respond(to: prompt)
+            return try await respond(to: prompt, onPartial: onPartial)
         } catch LanguageModelSession.GenerationError.guardrailViolation {
             // Apple's safety filter, and it fires on innocuous things — asking
             // for the URL of a saved video tripped it in testing while asking
@@ -164,23 +170,38 @@ final class CoveAssistant {
         }
     }
 
-    private func respond(to prompt: String) async throws -> String {
-        let response = try await resolvedSession().respond(
+    /// Streams rather than waits.
+    ///
+    /// The whole answer arrives in a handful of snapshots — four for a couple of
+    /// sentences, in testing — so this is not a typewriter. It is the difference
+    /// between a panel that sits still for several seconds and one that is
+    /// visibly filling in, which is what a wait needs to be legible.
+    private func respond(
+        to prompt: String,
+        onPartial: @escaping @MainActor (String) -> Void
+    ) async throws -> String {
+        var latest = ""
+        for try await snapshot in resolvedSession().streamResponse(
             to: prompt,
             options: GenerationOptions(
-                // Low, but not at the floor. This carries both halves now: a
-                // lookup, where the failure worth avoiding is an invented
-                // detail that reads as though it came off the shelf, and a
-                // greeting, where a model pinned at zero answers like a form.
+                // Low, but not at the floor. This carries both halves: a lookup,
+                // where the failure worth avoiding is an invented detail that
+                // reads as though it came off the shelf, and a greeting, where a
+                // model pinned at zero answers like a form.
                 temperature: 0.5,
-                // The answer sits in a 34pt-tall panel under the wordmark, and
-                // shows four lines. Anything longer is truncated on screen, so
-                // asking for it only spends time.
-                maximumResponseTokens: 200
+                // Enough for an answer that lists a few captures without turning
+                // the island into a page of prose.
+                maximumResponseTokens: 400
             )
-        )
+        ) {
+            latest = snapshot.content
+            let shown = latest.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Nothing yet is not worth showing: an empty bubble replacing the
+            // working indicator would read as an answer that came back blank.
+            if !shown.isEmpty { onPartial(shown) }
+        }
 
-        let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = latest.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw AssistantError.emptyAnswer }
         return text
     }

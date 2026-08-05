@@ -41,6 +41,10 @@ struct ChatHistoryScreen: View {
     /// state of this screen rather than a row in the store.
     @State private var isStartingNew = false
     @State private var draft = ""
+    /// Whether a reply is on its way. Cove's turn exists from the moment the
+    /// question is asked and is empty until the answer starts arriving, so this
+    /// is what decides between drawing a working indicator and drawing nothing.
+    @State private var isAnswering = false
     /// Held so the bar appears by itself if Apple Intelligence finishes
     /// downloading while the screen is open.
     @State private var assistant = CoveAssistant.shared
@@ -172,22 +176,58 @@ struct ChatHistoryScreen: View {
     @ViewBuilder
     private var transcript: some View {
         if let openThread {
+            // Cove's turn is stored empty and filled in as the answer streams,
+            // so the transcript ends in a turn with no text for as long as the
+            // model is thinking. An empty bubble is not something anyone can
+            // read, so it waits until there are words in it.
+            let turns = openThread.orderedTurns.filter { !$0.text.isEmpty }
+            let isAwaiting = isAnswering && openThread.orderedTurns.last?.text.isEmpty != false
+
             ScrollViewReader { proxy in
                 ScrollView {
-                    let turns = openThread.orderedTurns
-
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
-                            bubble(turn, hasTail: turns.endsSpeakerRun(at: index))
-                                .padding(.top, turns.spacingBefore(at: index, tight: 3, loose: 12))
-                                .id(turn.id)
+                            bubble(
+                                turn,
+                                // No tail when the working indicator is about to
+                                // sit underneath: it continues Cove's side even
+                                // though it is not a turn.
+                                hasTail: turns.endsSpeakerRun(at: index)
+                                    && !(index == turns.count - 1 && isAwaiting)
+                            )
+                            .padding(.top, turns.spacingBefore(at: index, tight: 3, loose: 12))
+                            .transition(.coveBubble(isUser: turn.role == .user))
+                            .id(turn.id)
+                        }
+
+                        if isAwaiting {
+                            pendingBubble
+                                .padding(.top, 12)
+                                .transition(.coveBubble(isUser: false))
+                                .id(Self.pendingBubbleID)
                         }
                     }
                     .padding(22)
+                    // The window had no animation at all: turns appeared fully
+                    // formed, which on a surface this size reads as the view
+                    // having been reloaded rather than as somebody answering.
+                    .animation(Self.bubbleSpring, value: turns.count)
+                    .animation(Self.bubbleSpring, value: isAwaiting)
+                    // Each streamed snapshot makes the reply taller. Without
+                    // this the bubble jumps to its new size; with it, it grows.
+                    .animation(.easeOut(duration: 0.18), value: turns.last?.text)
                 }
                 // A reply added below the fold is a reply nobody sees. The last
                 // turn is what the screen is about, so it is what stays in view.
-                .onChange(of: openThread.turns.count) { _, _ in
+                .onChange(of: turns.count) { _, _ in
+                    scrollToEnd(proxy, in: openThread)
+                }
+                .onChange(of: isAwaiting) { _, _ in
+                    scrollToEnd(proxy, in: openThread)
+                }
+                // A growing reply pushes its own last line out of sight, so the
+                // follow happens on every snapshot rather than once per turn.
+                .onChange(of: turns.last?.text) { _, _ in
                     scrollToEnd(proxy, in: openThread)
                 }
                 .onChange(of: openThread.id) { _, _ in
@@ -200,8 +240,33 @@ struct ChatHistoryScreen: View {
         }
     }
 
+    /// Cove's turn before it has one, in the shape the answer will arrive in.
+    private var pendingBubble: some View {
+        Text("Thinking…")
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .coveShimmer(isActive: true)
+            .padding(.vertical, 9)
+            .padding(.horizontal, 14)
+            .padding(.leading, CoveBubbleShape.tailWidth)
+            .background(
+                .primary.opacity(0.07),
+                in: CoveBubbleShape(isUser: false, hasTail: true, radius: 17)
+            )
+            .frame(maxWidth: 460, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static let pendingBubbleID = "cove-pending-answer"
+    /// Matches the island's, so one movement is not two speeds.
+    private static let bubbleSpring = Animation.spring(response: 0.34, dampingFraction: 0.7)
+
     private func scrollToEnd(_ proxy: ScrollViewProxy, in thread: ChatThread) {
-        guard let last = thread.orderedTurns.last else { return }
+        if isAnswering, thread.orderedTurns.last?.text.isEmpty != false {
+            proxy.scrollTo(Self.pendingBubbleID, anchor: .bottom)
+            return
+        }
+        guard let last = thread.orderedTurns.last(where: { !$0.text.isEmpty }) else { return }
         proxy.scrollTo(last.id, anchor: .bottom)
     }
 
@@ -322,16 +387,20 @@ struct ChatHistoryScreen: View {
         draft = ""
         isPromptFocused = true
 
-        Task {
-            guard let exchange = await CoveChat.ask(
-                question,
-                in: openThread,
-                shelf: items,
-                context: modelContext
-            ) else { return }
+        // Synchronous, so the question and Cove's empty turn are both on screen
+        // in this frame. The thread is known here too, which is what lets a
+        // brand-new conversation select itself without waiting for an answer.
+        guard let exchange = CoveChat.begin(question, in: openThread, context: modelContext) else {
+            return
+        }
 
-            selection = exchange.thread.id
-            isStartingNew = false
+        selection = exchange.thread.id
+        isStartingNew = false
+        isAnswering = true
+
+        Task {
+            await CoveChat.answer(exchange, to: question, shelf: items, context: modelContext)
+            isAnswering = false
         }
     }
 
