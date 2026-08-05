@@ -262,14 +262,29 @@ actor ShelfProcessor {
         Task { await drain() }
     }
 
+    /// Works both queues until both are empty, captures first.
+    ///
+    /// The order is a priority, not a phase, and that distinction was a bug.
+    /// Draining `queue` to exhaustion and *then* `reembedQueue` meant anything
+    /// enqueued during the re-embed pass was left sitting: `drainSoon` sees
+    /// `isDraining` and returns, the re-embed loop never looks at `queue` again,
+    /// and the drain ends with work still in it. The window is not small —
+    /// installing the encoders puts the whole shelf into `reembedQueue`, which
+    /// is minutes — and a capture dropped inside it stayed `.queued` with no
+    /// OCR, no vector and no activity on the island until the next launch.
+    ///
+    /// Re-checking `queue` on every iteration also gives a capture the user just
+    /// made priority over housekeeping, which is the right way round: one is
+    /// something they are waiting for, the other is maintenance nobody asked
+    /// for.
     private func drain() async {
-        while let next = queue.first {
-            queue.removeFirst()
-            await process(itemID: next.id, isSilent: next.isSilent)
-        }
-        while let next = reembedQueue.first {
-            reembedQueue.removeFirst()
-            await reembed(itemID: next)
+        while !queue.isEmpty || !reembedQueue.isEmpty {
+            if !queue.isEmpty {
+                let next = queue.removeFirst()
+                await process(itemID: next.id, isSilent: next.isSilent)
+                continue
+            }
+            await reembed(itemID: reembedQueue.removeFirst())
         }
         isDraining = false
     }

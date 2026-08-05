@@ -92,24 +92,33 @@ enum CoveChat {
         switch assistant.readiness {
         case .unavailable(let reason):
             exchange.reply.text = retrieved(matches, unavailable: reason)
+            // The captures are offered here too. Without a model to name them
+            // there is all the more reason to make them clickable, and these are
+            // search results rather than anything Cove claimed about them.
+            exchange.reply.linkedItemIDs = matches.prefix(retrievalLimit).map(\.id)
 
         case .ready:
-            // Topped up with what is recent when the search came back thin, so
-            // the model is never asked about a shelf it cannot see.
-            let grounding = assistant.grounding(matches: matches, recent: items)
+            // Falls back to what is recent when a *question* finds nothing, so
+            // the model is never asked about a shelf it cannot see — and to
+            // nothing at all when the message was never a question.
+            let grounding = assistant.grounding(for: question, matches: matches, recent: items)
 
             do {
-                exchange.reply.text = try await assistant.answer(
+                let reply = try await assistant.answer(
                     to: question,
                     grounding: grounding,
                     matched: !matches.isEmpty
                 ) { partial in
                     exchange.reply.text = partial
                 }
+                exchange.reply.text = reply.text
+                exchange.reply.linkedItemIDs = reply.offered
             } catch {
                 // Said in Cove's voice, and true: no answer was produced. The
-                // one thing it must not do is read like one.
+                // one thing it must not do is read like one — and it offers
+                // nothing, because nothing was found.
                 exchange.reply.text = error.localizedDescription
+                exchange.reply.linkedItemIDs = []
             }
         }
 

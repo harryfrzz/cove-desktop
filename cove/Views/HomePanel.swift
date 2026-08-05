@@ -307,15 +307,26 @@ struct HomePanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(visibleTurns.enumerated()), id: \.element.id) { index, turn in
-                        transcriptBubble(
-                            turn.text,
-                            isUser: turn.role == .user,
-                            // No tail while the shimmer is about to sit under
-                            // this bubble: it continues Cove's side of the
-                            // conversation even though it is not a turn.
-                            hasTail: visibleTurns.endsSpeakerRun(at: index)
-                                && !(index == visibleTurns.count - 1 && isAwaitingReply)
-                        )
+                        VStack(alignment: .leading, spacing: 5) {
+                            transcriptBubble(
+                                turn.text,
+                                isUser: turn.role == .user,
+                                // No tail while the shimmer is about to sit
+                                // under this bubble: it continues Cove's side of
+                                // the conversation even though it is not a turn.
+                                hasTail: visibleTurns.endsSpeakerRun(at: index)
+                                    && !(index == visibleTurns.count - 1 && isAwaitingReply)
+                            )
+
+                            // Resolved against the live shelf at the moment of
+                            // drawing, so a row is always the shelf's own record
+                            // of where that capture points — and one deleted
+                            // since the answer was given quietly stops being
+                            // offered.
+                            ForEach(CaptureLinks.resolve(turn.linkedItemIDs, in: items)) { item in
+                                IslandCaptureLink(item: item)
+                            }
+                        }
                         .padding(.top, visibleTurns.spacingBefore(at: index, tight: 2, loose: 8))
                         .transition(.coveBubble(isUser: turn.role == .user))
                         .id(turn.id)
@@ -584,6 +595,12 @@ private struct OnePageAtATime: ScrollTargetBehavior {
 private struct ChatHistoryPage: View {
     let threads: [ChatThread]
 
+    /// The shelf, for resolving the captures a past answer offered. Queried here
+    /// rather than passed down: this page is reached by swiping and may never be
+    /// looked at, and the home page has no reason to carry the shelf on its
+    /// behalf.
+    @Query(sort: \ShelfItem.createdAt, order: .reverse) private var items: [ShelfItem]
+
     @State private var openThread: ChatThread?
 
     private static let inset: CGFloat = 22
@@ -704,9 +721,15 @@ private struct ChatHistoryPage: View {
 
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
-                        bubble(turn, hasTail: turns.endsSpeakerRun(at: index))
-                            .padding(.top, turns.spacingBefore(at: index, tight: 2, loose: 8))
-                            .transition(.coveBubble(isUser: turn.role == .user))
+                        VStack(alignment: .leading, spacing: 5) {
+                            bubble(turn, hasTail: turns.endsSpeakerRun(at: index))
+
+                            ForEach(CaptureLinks.resolve(turn.linkedItemIDs, in: items)) { item in
+                                IslandCaptureLink(item: item)
+                            }
+                        }
+                        .padding(.top, turns.spacingBefore(at: index, tight: 2, loose: 8))
+                        .transition(.coveBubble(isUser: turn.role == .user))
                     }
                 }
                 .padding(.horizontal, Self.inset)

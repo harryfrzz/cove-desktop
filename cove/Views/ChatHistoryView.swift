@@ -187,14 +187,23 @@ struct ChatHistoryScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
-                            bubble(
-                                turn,
-                                // No tail when the working indicator is about to
-                                // sit underneath: it continues Cove's side even
-                                // though it is not a turn.
-                                hasTail: turns.endsSpeakerRun(at: index)
-                                    && !(index == turns.count - 1 && isAwaiting)
-                            )
+                            VStack(alignment: .leading, spacing: 6) {
+                                bubble(
+                                    turn,
+                                    // No tail when the working indicator is
+                                    // about to sit underneath: it continues
+                                    // Cove's side even though it is not a turn.
+                                    hasTail: turns.endsSpeakerRun(at: index)
+                                        && !(index == turns.count - 1 && isAwaiting)
+                                )
+
+                                // Resolved against the live shelf as they are
+                                // drawn, so a row always points where the shelf
+                                // currently says it does.
+                                ForEach(CaptureLinks.resolve(turn.linkedItemIDs, in: items)) { item in
+                                    WindowCaptureLink(item: item)
+                                }
+                            }
                             .padding(.top, turns.spacingBefore(at: index, tight: 3, loose: 12))
                             .transition(.coveBubble(isUser: turn.role == .user))
                             .id(turn.id)
