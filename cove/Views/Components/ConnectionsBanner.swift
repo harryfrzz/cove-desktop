@@ -64,6 +64,24 @@ struct ConnectionsBanner: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    // Said here as well as in Settings, because this is where
+                    // most people will press Connect for the first time — and a
+                    // press that quietly achieves nothing reads as a dead
+                    // button rather than as a permission that has to be granted
+                    // somewhere else.
+                    if let problem = connections.problem {
+                        Text(problem)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+
+                        Button("Open System Settings") {
+                            CoveConnections.openPrivacySettings()
+                        }
+                        .controlSize(.small)
+                    }
                 }
 
                 Spacer(minLength: 8)

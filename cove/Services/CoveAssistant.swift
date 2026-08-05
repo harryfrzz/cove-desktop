@@ -104,13 +104,31 @@ final class CoveAssistant {
     /// 3])" instead of two links. Five captures leaves it room to work.
     private static let groundingLimit = 5
 
-    /// The longest any single capture's text may contribute.
+    /// The longest any single capture's text may contribute, normally.
     ///
-    /// Also much shorter than it was, for the same reason: a page of OCR at 400
+    /// Short for the same reason the grounding limit is: a page of OCR at 400
     /// characters, three fields deep, eight captures wide, *is* the context
     /// window. This is enough to tell two similar captures apart, which is all
-    /// it was ever needed for.
+    /// most questions need.
     private static let excerptLimit = 120
+
+    /// The budget when the question is about a date — see `isScheduling`.
+    ///
+    /// 120 characters is fine for recognising a capture and useless for reading
+    /// one. A screenshot of a poster begins with the band and the venue and puts
+    /// the date further down, so "add this to my calendar" was being answered by
+    /// a model that had been shown everything about the poster except the one
+    /// fact it needed.
+    private static let readingExcerptLimit = 600
+
+    /// How many captures a scheduling question sees.
+    ///
+    /// Fewer, deliberately, because they are each five times longer: two at 600
+    /// characters costs about what five at 120 does, so the context window is
+    /// not the thing being traded. What is traded is breadth for depth, and that
+    /// is the right way round here — "add *this* to my calendar" is about one
+    /// capture, and a menu of five is not what the question is asking for.
+    private static let schedulingGroundingLimit = 2
 
     /// Replies to whatever was typed — a question about the shelf, or just
     /// hello.
@@ -142,8 +160,20 @@ final class CoveAssistant {
     ) async throws -> Reply {
         guard isReady else { throw AssistantError.noModel }
 
-        let shown = Array(items.prefix(Self.groundingLimit))
-        let prompt = Self.prompt(question: question, items: items, matched: matched)
+        // Fewer captures and more of each when the question is about a date.
+        // The two limits move together on purpose: `shown` is what the model is
+        // shown *and* what `showCaptures` may reach, and letting those disagree
+        // would let it offer a capture it was never given a number for.
+        let scheduling = Self.isScheduling(question)
+        let shown = Array(
+            items.prefix(scheduling ? Self.schedulingGroundingLimit : Self.groundingLimit)
+        )
+        let prompt = Self.prompt(
+            question: question,
+            items: shown,
+            matched: matched,
+            reading: scheduling
+        )
         // What `showCaptures` may reach, for this turn only. Set before the
         // model runs, because the tool can be called during the response.
         offers.replace(with: shown)
@@ -564,13 +594,18 @@ final class CoveAssistant {
     /// It also has to cover two different silences — a greeting, which never had
     /// an answer on the shelf, and a lookup that genuinely missed — so it says
     /// what happened and lets the model tell them apart.
-    private static func prompt(question: String, items: [ShelfItem], matched: Bool) -> String {
+    private static func prompt(
+        question: String,
+        items: [ShelfItem],
+        matched: Bool,
+        reading: Bool
+    ) -> String {
         guard !items.isEmpty else {
             return """
                 Nothing on the user's shelf matched this message.
 
                 The user says: "\(question)"
-
+                \(reading ? "\n\(clock)\n" : "")
                 Reply to them. If they were asking about something they saved, \
                 say plainly that you could not find it. Otherwise just talk to \
                 them — do not mention their shelf at all.
@@ -579,8 +614,8 @@ final class CoveAssistant {
                 """
         }
 
-        let captures = items.prefix(groundingLimit).enumerated().map { index, item in
-            described(item, number: index + 1)
+        let captures = items.enumerated().map { index, item in
+            described(item, number: index + 1, limit: reading ? readingExcerptLimit : excerptLimit)
         }
         let heading = matched
             ? "Captures from the user's shelf, best match first:"
@@ -598,8 +633,81 @@ final class CoveAssistant {
             \(captures.joined(separator: "\n"))
 
             The user says: "\(question)"
-
+            \(reading ? "\n\(clock)\n" : "")
             Reply to them.
+            """
+    }
+
+    /// Whether the question is one that needs to *read* a capture rather than
+    /// recognise it.
+    ///
+    /// Everything on this list ends in a date, a time or a body of text being
+    /// lifted out of something saved — which is the one case where 120
+    /// characters of a screenshot is not a summary, it is a truncation across
+    /// the answer. A poster's date is never in its first line.
+    ///
+    /// Wrong in the harmless direction by design. A false positive costs three
+    /// captures of breadth on a question that did not need them; a false
+    /// negative is "add this to my calendar" answered by a model that was shown
+    /// the top of the poster and nothing else.
+    private static func isScheduling(_ question: String) -> Bool {
+        let words = Set(
+            question
+                .lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+        )
+        return !words.isDisjoint(with: schedulingWords)
+    }
+
+    private static let schedulingWords: Set<String> = [
+        "calendar", "event", "events", "remind", "reminder", "reminders",
+        "schedule", "scheduled", "appointment", "meeting", "invite",
+        "invitation", "rsvp", "booking", "booked", "agenda", "deadline",
+        "due", "when", "date", "time", "tomorrow", "tonight", "today",
+        // Notes takes the same expansion: writing a capture into a note means
+        // reading the capture, not naming it.
+        "note", "notes"
+    ]
+
+    /// What time it is, for the tools that take a date.
+    ///
+    /// The model has no clock. Asked to add a reminder for "tomorrow at 6pm" it
+    /// answers from the only sense of *now* it has, which is whenever its
+    /// training stopped: on 5 August 2026 it produced 2 December **2025** for
+    /// tomorrow, 7 March 2025 for "Friday", and filed both without complaint.
+    /// That is the worst shape a failure can take here — `addReminder` succeeds,
+    /// reports success, and the reminder is eight months in the past.
+    ///
+    /// In the prompt rather than the instructions on purpose. Instructions are
+    /// set once and the session outlives them; a conversation open across
+    /// midnight would keep resolving "tomorrow" against the day it began.
+    ///
+    /// Only on questions that are about a date, and that is not an optimisation.
+    /// Put in front of every message it became the most concrete thing on the
+    /// page, and the model answered with it: "thanks!" came back as "Tomorrow is
+    /// Friday, 10 August 2026". A greeting has no use for the time and should
+    /// not be told it.
+    ///
+    /// The weekday is spelled out because "Friday" is a question about which day
+    /// today is, not about the date. It helps and does not settle it — the model
+    /// still miscounts weekdays — which is why `SystemActions` reports the date
+    /// it actually used back to the user, and the instructions tell the model to
+    /// relay it. Getting it wrong in a sentence they can see beats getting it
+    /// wrong silently.
+    /// Worded as a footnote and placed after the question, both because a model
+    /// this size answers with whatever is most concrete and nearest the top.
+    /// Opening the prompt with "Right now it is…" got "thanks!" answered with
+    /// tomorrow's date, and "when is the concert on that poster?" answered with
+    /// today's — the clock became the subject instead of the reference.
+    private static var clock: String {
+        let now = Date()
+        return """
+            (Reference only — today is \
+            \(now.formatted(date: .complete, time: .shortened)), \
+            \(TimeZone.current.identifier). Use it to turn words like tomorrow \
+            or Friday into a real date. Never answer with today's date unless \
+            they asked what today is.)
             """
     }
 
@@ -748,7 +856,7 @@ final class CoveAssistant {
     /// The address is deliberately absent. `showCaptures` resolves that from
     /// the shelf's own record, so putting it here would only spend tokens and
     /// tempt the model to answer with an address instead of a link.
-    private static func described(_ item: ShelfItem, number: Int) -> String {
+    private static func described(_ item: ShelfItem, number: Int, limit: Int) -> String {
         var headline = "\(number). \(item.title)"
         if let host = item.linkHost, !host.isEmpty {
             headline += " — \(host)"
@@ -759,23 +867,30 @@ final class CoveAssistant {
         // One excerpt, not three, and the most deliberate one available: what
         // the user wrote beats what Cove summarised, which beats what the OCR
         // happened to catch.
-        guard let detail = excerpt(item.userNote)
-                ?? excerpt(item.summary)
-                ?? excerpt(item.extractedText)
-        else {
+        //
+        // Except when the question needs reading rather than recognising. A
+        // screenshot's note is usually a line the user typed and its OCR is the
+        // whole poster, so for a date the priority is the other way round —
+        // picking the note would hand back a label instead of the text with the
+        // date in it.
+        let ordered = limit > excerptLimit
+            ? [item.extractedText, item.userNote, item.summary]
+            : [item.userNote, item.summary, item.extractedText]
+
+        guard let detail = ordered.lazy.compactMap({ excerpt($0, limit: limit) }).first else {
             return headline
         }
         return headline + "\n   \(detail)"
     }
 
-    private static func excerpt(_ value: String?) -> String? {
+    private static func excerpt(_ value: String?, limit: Int) -> String? {
         guard let cleaned = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !cleaned.isEmpty else {
             return nil
         }
         let flattened = cleaned.replacingOccurrences(of: "\n", with: " ")
-        guard flattened.count > excerptLimit else { return flattened }
-        return String(flattened.prefix(excerptLimit)) + "…"
+        guard flattened.count > limit else { return flattened }
+        return String(flattened.prefix(limit)) + "…"
     }
 
     enum AssistantError: LocalizedError {
@@ -901,9 +1016,16 @@ struct ShowCapturesTool: Tool {
             )
         }
         if !result.unopenable.isEmpty {
+            // Worded as an instruction rather than a refusal, because the model
+            // repeats what a tool hands back. "There is nothing to open outside
+            // Cove" came out verbatim as the answer to "when is the concert on
+            // that poster?" — a true sentence about links, and no reply at all
+            // to the question that was asked.
             lines.append(
                 result.unopenable.map { "“\($0)”" }.joined(separator: ", ")
-                    + " could not be shown: there is nothing to open outside Cove."
+                    + " is a screenshot or a note, so it has no link to show. "
+                    + "Answer the user's question from its text instead, and do "
+                    + "not mention showing or opening anything."
             )
         }
         guard !lines.isEmpty else {
