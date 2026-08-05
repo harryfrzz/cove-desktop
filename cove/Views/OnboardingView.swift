@@ -105,10 +105,12 @@ struct OnboardingView: View {
                     links, notes and files. Everything stays on this Mac.
                     """
             ) {
-                Text("Cove")
-                    .font(.system(size: 64, weight: .semibold, design: .serif))
-                    .foregroundStyle(.primary)
-                    .padding(.bottom, 4)
+                OnboardingMark {
+                    Text("Cove")
+                        .font(.system(size: 64, weight: .semibold, design: .serif))
+                        .foregroundStyle(.primary)
+                }
+                .padding(.bottom, 4)
             }
 
         case .island:
@@ -326,10 +328,12 @@ struct OnboardingView: View {
             Spacer(minLength: 0)
 
             if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 44, weight: .light))
-                    .foregroundStyle(CoveTheme.accent)
-                    .accessibilityHidden(true)
+                OnboardingMark {
+                    Image(systemName: icon)
+                        .font(.system(size: 44, weight: .light))
+                        .foregroundStyle(CoveTheme.accent)
+                }
+                .accessibilityHidden(true)
             }
 
             accessory()
@@ -439,5 +443,46 @@ struct OnboardingView: View {
     private func step(_ delta: Int) {
         guard let next = Page(rawValue: page.rawValue + delta) else { return }
         page = next
+    }
+}
+
+/// A page's mark, lit by Cove's shimmer as the page arrives and then left at
+/// rest.
+///
+/// A few passes rather than a loop. The shimmer is Cove's working signal
+/// everywhere else in the app, and one running forever under a paragraph would
+/// say the introduction is busy doing something — as well as being a moving
+/// object competing with the words it is meant to introduce. Running it once on
+/// arrival keeps the arrival and drops the claim.
+///
+/// The base dims underneath it, which is not decoration: the band works by
+/// replacing the content's colour as it passes, so it needs something darker to
+/// lift. Against a window's full-strength label colour in dark mode the band is
+/// white on near-white and there is nothing to see.
+///
+/// Self-triggering, because the pages remount — `content` is keyed on the page —
+/// so appearing is the same event as being switched to, and no timing has to be
+/// coordinated from outside.
+private struct OnboardingMark<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    /// Whole passes of the band, so it stops at the clear edge rather than
+    /// cutting a lit band in half.
+    private static var passes: Double { 2 }
+
+    @State private var isShimmering = false
+    @State private var startedAt = Date.now
+
+    var body: some View {
+        content
+            .opacity(isShimmering ? 0.45 : 1)
+            .coveShimmer(isActive: isShimmering, startedAt: startedAt)
+            .animation(.easeOut(duration: 0.35), value: isShimmering)
+            .task {
+                startedAt = .now
+                isShimmering = true
+                try? await Task.sleep(for: .seconds(CoveShimmer.period * Self.passes))
+                isShimmering = false
+            }
     }
 }

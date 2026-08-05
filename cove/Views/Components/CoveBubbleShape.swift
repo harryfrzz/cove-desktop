@@ -90,6 +90,33 @@ struct CoveBubbleShape: Shape {
     }
 }
 
+/// How a bubble arrives: scaled down and low, growing from its own tail corner
+/// into place.
+///
+/// The anchor is the point of it. Scaling from the centre makes a bubble bloom
+/// out of nothing in the middle of the column, which reads as a card being
+/// dealt; scaling from the corner the tail is on makes it grow out of the side
+/// the speaker is on, the way Messages does. The two look nothing alike for the
+/// sake of one parameter.
+///
+/// A spring rather than a curve, and a slightly bouncy one. This is the only
+/// moment in Cove where something arrives rather than changes, and the overshoot
+/// is what makes it land instead of stop.
+extension AnyTransition {
+    static func coveBubble(isUser: Bool) -> AnyTransition {
+        .asymmetric(
+            insertion: .scale(scale: 0.55, anchor: isUser ? .bottomTrailing : .bottomLeading)
+                .combined(with: .opacity)
+                .combined(with: .offset(y: 6)),
+            // Removal is a plain fade. Bubbles are only removed when the whole
+            // transcript goes, and five of them springing away in sequence would
+            // be a flourish on the way out of a panel nobody is looking at any
+            // more.
+            removal: .opacity
+        )
+    }
+}
+
 extension Array where Element == ChatTurn {
     /// Whether the turn at `index` is the last thing that speaker says before
     /// the other one answers — so the one that carries the tail.

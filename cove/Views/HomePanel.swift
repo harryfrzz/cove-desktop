@@ -313,6 +313,7 @@ struct HomePanel: View {
                                 && !(index == storedTurns.count - 1 && askingQuestion != nil)
                         )
                         .padding(.top, storedTurns.spacingBefore(at: index, tight: 2, loose: 8))
+                        .transition(.coveBubble(isUser: turn.role == .user))
                         .id(turn.id)
                     }
 
@@ -320,19 +321,31 @@ struct HomePanel: View {
                     // drawn identically and in the same place, so when the real
                     // one lands this does not move or flicker — it is the same
                     // bubble as far as anyone looking at it is concerned.
+                    //
+                    // Which is also why this one does not spring: it is replaced
+                    // by the stored turn a moment later, and popping twice for
+                    // one question would give that handover away.
                     if let askingQuestion {
                         transcriptBubble(askingQuestion, isUser: true, hasTail: true)
                             .padding(.top, storedTurns.isEmpty ? 0 : 8)
+                            .transition(.coveBubble(isUser: true))
                             .id(Self.askingBubbleID)
                     }
 
                     if isThinking {
                         pendingBubble
                             .padding(.top, 8)
+                            .transition(.coveBubble(isUser: false))
                             .id(Self.pendingBubbleID)
                     }
                 }
                 .padding(.vertical, 2)
+                // The spring the bubbles arrive on. Declared here rather than on
+                // each of them so a question and the answer under it land as one
+                // movement.
+                .animation(Self.bubbleSpring, value: storedTurns.count)
+                .animation(Self.bubbleSpring, value: askingQuestion)
+                .animation(Self.bubbleSpring, value: isThinking)
             }
             .scrollIndicators(.never)
             // The last thing said is what the panel is about, and on a surface
@@ -399,6 +412,10 @@ struct HomePanel: View {
     /// Wide enough for a sentence, narrow enough that a bubble is visibly a
     /// bubble rather than the full width of the panel.
     private static let bubbleWidth: CGFloat = 260
+
+    /// Enough bounce to read as arriving, not so much that a reply wobbles.
+    /// Short, because it runs while someone is already reading the words.
+    private static let bubbleSpring = Animation.spring(response: 0.34, dampingFraction: 0.7)
 
     private static let pendingBubbleID = "cove-pending-answer"
     private static let askingBubbleID = "cove-asking-question"
@@ -710,10 +727,14 @@ private struct ChatHistoryPage: View {
                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                         bubble(turn, hasTail: turns.endsSpeakerRun(at: index))
                             .padding(.top, turns.spacingBefore(at: index, tight: 2, loose: 8))
+                            .transition(.coveBubble(isUser: turn.role == .user))
                     }
                 }
                 .padding(.horizontal, Self.inset)
                 .padding(.bottom, 6)
+                // A thread opened from the list arrives whole, so this only ever
+                // animates a turn added while it is being read.
+                .animation(.spring(response: 0.34, dampingFraction: 0.7), value: turns.count)
             }
             .scrollIndicators(.never)
         }
