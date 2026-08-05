@@ -2129,6 +2129,12 @@ private struct ShelfItemDetailView: View {
                         detailSection(title: "Captured content", value: detail)
                     }
 
+                    // Above the tags and the metadata, because it is the one
+                    // thing here that does something rather than describes
+                    // something — and it draws nothing at all unless Cove found
+                    // a date in what it read.
+                    CaptureScheduleSection(item: item)
+
                     if !item.tags.isEmpty {
                         VStack(alignment: .leading, spacing: 9) {
                             Text("Tags")
