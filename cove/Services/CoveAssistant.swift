@@ -307,9 +307,22 @@ final class CoveAssistant {
     /// the honest record of what the user was shown, which is the thing worth
     /// preserving here.
     func resume(_ thread: ChatThread?) {
-        guard session == nil || thread?.id != sessionThreadID else { return }
+        // No thread yet always means a conversation that is starting, so it
+        // always gets an empty session. Comparing ids here instead would make
+        // two consecutive new conversations look identical — both nil — and the
+        // second would inherit the first one's memory, which is the exact bug
+        // this method exists to prevent. It is only reached on the opening
+        // question of a thread: `CoveChat` creates one to store that turn in,
+        // and every question after it arrives with the thread in hand.
+        guard let thread else {
+            session = makeSession(replaying: nil)
+            sessionThreadID = nil
+            return
+        }
+
+        guard session == nil || thread.id != sessionThreadID else { return }
         session = makeSession(replaying: thread)
-        sessionThreadID = thread?.id
+        sessionThreadID = thread.id
     }
 
     /// The running session, started on first use.

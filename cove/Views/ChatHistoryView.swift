@@ -168,9 +168,12 @@ struct ChatHistoryScreen: View {
         if let openThread {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(openThread.orderedTurns) { turn in
-                            bubble(turn)
+                    let turns = openThread.orderedTurns
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                            bubble(turn, hasTail: turns.endsSpeakerRun(at: index))
+                                .padding(.top, turns.spacingBefore(at: index, tight: 3, loose: 12))
                                 .id(turn.id)
                         }
                     }
@@ -232,7 +235,7 @@ struct ChatHistoryScreen: View {
     /// The user's turn sits right and tinted, Cove's sits left and plain — the
     /// arrangement every transcript uses, so no label is needed to say who said
     /// what.
-    private func bubble(_ turn: ChatTurn) -> some View {
+    private func bubble(_ turn: ChatTurn, hasTail: Bool) -> some View {
         let isUser = turn.role == .user
 
         return Text(turn.text)
@@ -243,11 +246,14 @@ struct ChatHistoryScreen: View {
             // readable in both appearances.
             .foregroundStyle(isUser ? AnyShapeStyle(CoveTheme.onAccent) : AnyShapeStyle(.primary))
             .textSelection(.enabled)
+            .padding(.vertical, 9)
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(isUser ? .trailing : .leading, CoveBubbleShape.tailWidth)
             .background(
                 isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(.primary.opacity(0.07)),
-                in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                // Larger radius than the island's: the same shape at window type
+                // size, not the same number of points.
+                in: CoveBubbleShape(isUser: isUser, hasTail: hasTail, radius: 17)
             )
             // Short answers should not be stretched across the pane, and long
             // ones should not run the full width of a wide window — either way

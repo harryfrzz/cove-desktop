@@ -301,10 +301,19 @@ struct HomePanel: View {
     private var liveTranscript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 7) {
-                    ForEach(storedTurns) { turn in
-                        transcriptBubble(turn.text, isUser: turn.role == .user)
-                            .id(turn.id)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(storedTurns.enumerated()), id: \.element.id) { index, turn in
+                        transcriptBubble(
+                            turn.text,
+                            isUser: turn.role == .user,
+                            // No tail while the next thing on screen continues
+                            // this speaker's run — including the question in
+                            // flight, which the stored turns cannot know about.
+                            hasTail: storedTurns.endsSpeakerRun(at: index)
+                                && !(index == storedTurns.count - 1 && askingQuestion != nil)
+                        )
+                        .padding(.top, storedTurns.spacingBefore(at: index, tight: 2, loose: 8))
+                        .id(turn.id)
                     }
 
                     // The question, before there is a stored turn for it. It is
@@ -312,12 +321,14 @@ struct HomePanel: View {
                     // one lands this does not move or flicker — it is the same
                     // bubble as far as anyone looking at it is concerned.
                     if let askingQuestion {
-                        transcriptBubble(askingQuestion, isUser: true)
+                        transcriptBubble(askingQuestion, isUser: true, hasTail: true)
+                            .padding(.top, storedTurns.isEmpty ? 0 : 8)
                             .id(Self.askingBubbleID)
                     }
 
                     if isThinking {
                         pendingBubble
+                            .padding(.top, 8)
                             .id(Self.pendingBubbleID)
                     }
                 }
@@ -354,9 +365,10 @@ struct HomePanel: View {
             .font(.system(size: 10))
             .foregroundStyle(CoveTheme.inkSecondary)
             .coveShimmer(isActive: true)
+            .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(CoveTheme.raised, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .padding(.leading, CoveBubbleShape.tailWidth)
+            .background(CoveTheme.raised, in: CoveBubbleShape(isUser: false, hasTail: true))
             .frame(maxWidth: Self.bubbleWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .transition(.opacity)
@@ -365,17 +377,20 @@ struct HomePanel: View {
     /// Deliberately the same geometry, type size and colours as the Chats page's
     /// own bubbles. Two transcripts on one panel that disagreed about what a
     /// bubble looks like would read as two different features.
-    private func transcriptBubble(_ text: String, isUser: Bool) -> some View {
+    private func transcriptBubble(_ text: String, isUser: Bool, hasTail: Bool) -> some View {
         Text(text)
             .font(.system(size: 10))
             .foregroundStyle(isUser ? CoveTheme.onAccent : CoveTheme.ink)
             .multilineTextAlignment(.leading)
             .textSelection(.enabled)
+            .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            // The tail's own width, on its side only, so the text sits centred
+            // in the body of the bubble rather than drifting towards the tail.
+            .padding(isUser ? .trailing : .leading, CoveBubbleShape.tailWidth)
             .background(
                 isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(CoveTheme.raised),
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                in: CoveBubbleShape(isUser: isUser, hasTail: hasTail)
             )
             .frame(maxWidth: Self.bubbleWidth, alignment: isUser ? .trailing : .leading)
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
@@ -456,10 +471,15 @@ struct HomePanel: View {
         guard !question.isEmpty, !isThinking else { return }
         model.promptText = ""
 
-        // Continues the newest thread, which on this surface is the only one
-        // reachable: the island shows one conversation, and starting a second is
-        // something the window's chat screen does.
-        let thread = threads.first
+        // The thread this opening of the island started, and nil for the first
+        // question of a new one — which is what makes each opening its own
+        // conversation rather than an endless append to whatever was asked
+        // days ago. `CoveChat` creates the thread on that first question, so a
+        // panel opened and closed without a word leaves nothing behind.
+        //
+        // Follow-ups within the same opening continue it, because `askedThreadID`
+        // is set below and only cleared when the island closes.
+        let thread = conversation
 
         withAnimation(.easeInOut(duration: 0.2)) {
             askedThreadID = thread?.id
@@ -678,9 +698,12 @@ private struct ChatHistoryPage: View {
             .buttonStyle(.plain)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 7) {
-                    ForEach(thread.orderedTurns) { turn in
-                        bubble(turn)
+                let turns = thread.orderedTurns
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                        bubble(turn, hasTail: turns.endsSpeakerRun(at: index))
+                            .padding(.top, turns.spacingBefore(at: index, tight: 2, loose: 8))
                     }
                 }
                 .padding(.horizontal, Self.inset)
@@ -693,7 +716,7 @@ private struct ChatHistoryPage: View {
     /// The user's turn sits right and tinted, Cove's sits left and plain — the
     /// arrangement every transcript uses, so no label is needed to say who said
     /// what.
-    private func bubble(_ turn: ChatTurn) -> some View {
+    private func bubble(_ turn: ChatTurn, hasTail: Bool) -> some View {
         let isUser = turn.role == .user
 
         return Text(turn.text)
@@ -703,11 +726,12 @@ private struct ChatHistoryPage: View {
             // cream the rest of the transcript uses.
             .foregroundStyle(isUser ? CoveTheme.onAccent : CoveTheme.ink)
             .multilineTextAlignment(.leading)
+            .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(isUser ? .trailing : .leading, CoveBubbleShape.tailWidth)
             .background(
                 isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(CoveTheme.raised),
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                in: CoveBubbleShape(isUser: isUser, hasTail: hasTail)
             )
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             .textSelection(.enabled)
