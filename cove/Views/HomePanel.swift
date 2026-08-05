@@ -21,7 +21,20 @@ struct HomePanel: View {
 
     @State private var tray = TempTray.shared
     @State private var activity = NotchActivityCenter.shared
-    @State private var answer: String?
+    /// Which thread the home page is showing, set by asking.
+    ///
+    /// Nil until a question is asked, which is what keeps the mark up on a
+    /// freshly opened panel, and nil again when the island closes: the island is
+    /// a transient surface and its resting face is the wordmark, not the tail of
+    /// a conversation from an hour ago. Nothing is lost by clearing it — the
+    /// thread is on the Chats page and in the window.
+    @State private var askedThreadID: UUID?
+    /// The question currently in flight, shown as the user's bubble until the
+    /// stored turn for it exists. `CoveChat` writes both turns only once there
+    /// is an answer to write — deliberately, so no reply is ever stored before
+    /// it was produced — and a chat that showed nothing until then would leave
+    /// the user's own words off screen for the whole wait.
+    @State private var askingQuestion: String?
     @State private var isThinking = false
     /// Held so the bar appears by itself if Apple Intelligence finishes
     /// downloading while the panel is open.
@@ -71,6 +84,16 @@ struct HomePanel: View {
             // focused, typing on the history page would land in a prompt bar
             // that isn't on screen.
             if current != .home { isPromptFocused = false }
+        }
+        .onChange(of: model.isOpen) { _, isOpen in
+            // The island is transient and its resting face is the mark. A panel
+            // reopened tomorrow showing the tail of today's conversation would
+            // be a surface that never returns to rest. Only the home page's view
+            // of it is dropped — the thread itself is on the Chats page and in
+            // the window.
+            guard !isOpen else { return }
+            askedThreadID = nil
+            askingQuestion = nil
         }
         .onChange(of: tray.isEmpty) { _, isEmpty in
             // The last thing held has been taken somewhere and its page went
@@ -229,18 +252,22 @@ struct HomePanel: View {
 
     // MARK: - Centre
 
-    /// The mark, or the last answer in its place. The shimmer is Cove's one
-    /// "working" signal and it lives here for the same reason it lived on the
-    /// phone's title: whatever is thinking should be the thing you are already
-    /// looking at.
+    /// The mark, or the conversation in its place.
+    ///
+    /// The answer used to land here as one centred paragraph, capped at four
+    /// lines, with the question nowhere on screen. That reads as a panel
+    /// announcing something rather than as an exchange, and it loses the half
+    /// the user wrote — which is the half that makes a reply legible when it
+    /// arrives a few seconds later. The same transcript the Chats page draws is
+    /// drawn here instead, on the same bubbles, so the two surfaces are
+    /// recognisably one feature.
+    ///
+    /// The mark stays for a panel nobody has asked anything yet. It is Cove's
+    /// resting face and the thing the island is when it has nothing to say.
     @ViewBuilder
     private var centrepiece: some View {
-        if let answer {
-            Text(answer)
-                .font(.system(size: 12))
-                .foregroundStyle(CoveTheme.inkSecondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(4)
+        if hasConversation {
+            liveTranscript
                 .transition(.opacity)
         } else {
             Text("Cove")
@@ -250,6 +277,116 @@ struct HomePanel: View {
                 .animation(.easeInOut(duration: 0.25), value: isThinking)
         }
     }
+
+    /// The thread being spoken to right now, or nil while the mark is up.
+    ///
+    /// Resolved from the store rather than held as a copy, so the bubbles follow
+    /// what was actually saved — including the assistant's turn, which lands
+    /// after the question and is what the user is waiting for.
+    private var conversation: ChatThread? {
+        guard let askedThreadID else { return nil }
+        return threads.first { $0.id == askedThreadID }
+    }
+
+    private var hasConversation: Bool {
+        askingQuestion != nil || conversation?.turns.isEmpty == false
+    }
+
+    private var storedTurns: [ChatTurn] {
+        conversation?.orderedTurns ?? []
+    }
+
+    /// The exchange, newest last, with the question in flight and the shimmer
+    /// under it.
+    private var liveTranscript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(storedTurns) { turn in
+                        transcriptBubble(turn.text, isUser: turn.role == .user)
+                            .id(turn.id)
+                    }
+
+                    // The question, before there is a stored turn for it. It is
+                    // drawn identically and in the same place, so when the real
+                    // one lands this does not move or flicker — it is the same
+                    // bubble as far as anyone looking at it is concerned.
+                    if let askingQuestion {
+                        transcriptBubble(askingQuestion, isUser: true)
+                            .id(Self.askingBubbleID)
+                    }
+
+                    if isThinking {
+                        pendingBubble
+                            .id(Self.pendingBubbleID)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.never)
+            // The last thing said is what the panel is about, and on a surface
+            // this short it is off the bottom the moment there are three turns.
+            .onChange(of: storedTurns.count) { _, _ in scrollToEnd(proxy) }
+            .onChange(of: isThinking) { _, _ in scrollToEnd(proxy) }
+            .onChange(of: askingQuestion) { _, _ in scrollToEnd(proxy) }
+            .onAppear { scrollToEnd(proxy) }
+        }
+    }
+
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        let target: AnyHashable? = if isThinking {
+            Self.pendingBubbleID
+        } else if askingQuestion != nil {
+            Self.askingBubbleID
+        } else {
+            storedTurns.last?.id
+        }
+        guard let target else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            proxy.scrollTo(target, anchor: .bottom)
+        }
+    }
+
+    /// Cove's turn before it has one: the shimmer, in the shape the answer will
+    /// arrive in, so nothing moves when it does.
+    private var pendingBubble: some View {
+        Text("Thinking…")
+            .font(.system(size: 10))
+            .foregroundStyle(CoveTheme.inkSecondary)
+            .coveShimmer(isActive: true)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(CoveTheme.raised, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .frame(maxWidth: Self.bubbleWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .transition(.opacity)
+    }
+
+    /// Deliberately the same geometry, type size and colours as the Chats page's
+    /// own bubbles. Two transcripts on one panel that disagreed about what a
+    /// bubble looks like would read as two different features.
+    private func transcriptBubble(_ text: String, isUser: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 10))
+            .foregroundStyle(isUser ? CoveTheme.onAccent : CoveTheme.ink)
+            .multilineTextAlignment(.leading)
+            .textSelection(.enabled)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(CoveTheme.raised),
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+            )
+            .frame(maxWidth: Self.bubbleWidth, alignment: isUser ? .trailing : .leading)
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+    }
+
+    /// Wide enough for a sentence, narrow enough that a bubble is visibly a
+    /// bubble rather than the full width of the panel.
+    private static let bubbleWidth: CGFloat = 260
+
+    private static let pendingBubbleID = "cove-pending-answer"
+    private static let askingBubbleID = "cove-asking-question"
 
     // MARK: - Prompt
 
@@ -300,14 +437,16 @@ struct HomePanel: View {
     }
 
     /// Asks the on-device model, grounded in the captures that best match the
-    /// question, and shows the reply where the mark was.
+    /// question, and puts the exchange on the panel as it happens.
     ///
-    /// Two things here are deliberate. The shimmer now covers real work, so
-    /// there is no sleep: it lasts exactly as long as the model takes, which is
-    /// what a working indicator is for. And the reply is shown after the answer
-    /// exists rather than before — the version this replaced inserted both turns
-    /// up front and then waited 900ms to reveal a string it already had, which
-    /// is the shape of a fake.
+    /// The shimmer covers real work, so there is no sleep: it lasts exactly as
+    /// long as the model takes, which is what a working indicator is for.
+    ///
+    /// Nothing here dismisses the answer on a timer any more. The reply used to
+    /// clear itself after six seconds, which suited a line of text standing in
+    /// for the wordmark and does not suit a conversation — a transcript that
+    /// erases itself while being read is not one. It goes when the island does,
+    /// and the thread it belonged to is on the Chats page either way.
     ///
     /// Retrieval, the model, and the store are `CoveChat`'s, not this view's.
     /// The chat screen in the window asks the same way, and the two must not
@@ -316,25 +455,35 @@ struct HomePanel: View {
         let question = model.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !isThinking else { return }
         model.promptText = ""
-        isThinking = true
+
+        // Continues the newest thread, which on this surface is the only one
+        // reachable: the island shows one conversation, and starting a second is
+        // something the window's chat screen does.
+        let thread = threads.first
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            askedThreadID = thread?.id
+            askingQuestion = question
+            isThinking = true
+        }
 
         Task {
-            // Continues the newest thread, which on this surface is the only one
-            // reachable: the island shows one conversation, and starting a
-            // second is something the window's chat screen does.
-            let reply = await CoveChat.ask(
+            let exchange = await CoveChat.ask(
                 question,
-                in: threads.first,
+                in: thread,
                 shelf: items,
                 context: modelContext
-            )?.reply
+            )
 
             withAnimation(.easeInOut(duration: 0.2)) {
+                // The stored thread first, so the turns this hands over to are
+                // already on screen when the local question bubble goes. Set the
+                // other way round, the panel would blink back to the mark for a
+                // frame on the first question of a brand-new thread.
+                askedThreadID = exchange?.thread.id ?? askedThreadID
+                askingQuestion = nil
                 isThinking = false
-                answer = reply
             }
-            try? await Task.sleep(for: .seconds(6))
-            withAnimation(.easeInOut(duration: 0.25)) { answer = nil }
         }
     }
 
