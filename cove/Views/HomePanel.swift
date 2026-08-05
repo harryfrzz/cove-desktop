@@ -21,7 +21,10 @@ struct HomePanel: View {
 
     @State private var tray = TempTray.shared
     @State private var activity = NotchActivityCenter.shared
-    @State private var answer: String?
+    @State private var answer: Answer?
+    /// Clears `answer` after a while. Held so the next question can cancel it —
+    /// left running, the last answer's timer wipes the one being read now.
+    @State private var dismissal: Task<Void, Never>?
     @State private var isThinking = false
     /// Held so the bar appears by itself if Apple Intelligence finishes
     /// downloading while the panel is open.
@@ -33,6 +36,16 @@ struct HomePanel: View {
     @State private var scrolledPage: Page? = .home
 
     private var page: Page { scrolledPage ?? .home }
+
+    /// The last thing Cove said, and whatever it is holding out to be clicked.
+    ///
+    /// The captures travel as ids and are resolved against the shelf at the
+    /// moment of drawing, so a row on the island is always the shelf's own
+    /// record of where that capture points.
+    private struct Answer {
+        let text: String
+        let links: [UUID]
+    }
 
     private enum Page: Hashable {
         case home
@@ -90,6 +103,17 @@ struct HomePanel: View {
         }
         .onChange(of: isPromptFocused) { _, focused in
             model.isEditing = focused
+        }
+        .onChange(of: model.isOpen) { _, isOpen in
+            // The island collapsing ends the exchange. An answer — and more to
+            // the point a set of links to choose between — is about the question
+            // just asked, and finding one still sitting there on the next visit
+            // would be Cove offering to open something nobody had asked about
+            // for an hour.
+            guard !isOpen else { return }
+            dismissal?.cancel()
+            dismissal = nil
+            answer = nil
         }
     }
 
@@ -178,7 +202,7 @@ struct HomePanel: View {
                     // Padding inside the fixed width, not outside it. Applied
                     // after the frame it would add to the page's width, and the
                     // page would no longer be a page wide.
-                    centrepiece
+                    centrepiece(height: proxy.size.height)
                         .padding(.horizontal, Self.inset)
                         .frame(width: width)
                         .id(Page.home)
@@ -229,14 +253,9 @@ struct HomePanel: View {
     /// phone's title: whatever is thinking should be the thing you are already
     /// looking at.
     @ViewBuilder
-    private var centrepiece: some View {
+    private func centrepiece(height: CGFloat) -> some View {
         if let answer {
-            Text(answer)
-                .font(.system(size: 12))
-                .foregroundStyle(CoveTheme.inkSecondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(4)
-                .transition(.opacity)
+            answerFace(answer, height: height)
         } else {
             Text("Cove")
                 .font(.system(size: 34, weight: .semibold, design: .serif))
@@ -244,6 +263,51 @@ struct HomePanel: View {
                 .coveShimmer(isActive: isThinking)
                 .animation(.easeInOut(duration: 0.25), value: isThinking)
         }
+    }
+
+    /// What Cove said, and under it whatever it is holding out.
+    ///
+    /// The links used to be inside the sentence, as addresses the model typed
+    /// out — and at this width that failed twice over. A URL is truncated to
+    /// "https://www.youtube…" before it says anything useful, and when the
+    /// answer is "you have two of these" the second one falls past the fourth
+    /// line and is simply not there. Given a row each, both are on screen and
+    /// either can be taken; which one is the user's call, which is the point.
+    ///
+    /// It scrolls because it has to — five offered captures do not fit under a
+    /// notch — and the minimum height is what keeps a one-line reply sitting in
+    /// the middle of the panel like the mark it replaced, rather than pinned to
+    /// the top of a scroll view.
+    private func answerFace(_ answer: Answer, height: CGFloat) -> some View {
+        let links = CaptureLinks.resolve(answer.links, in: items)
+
+        return ScrollView(.vertical) {
+            VStack(spacing: 9) {
+                if !answer.text.isEmpty {
+                    Text(answer.text)
+                        .font(.system(size: 12))
+                        .foregroundStyle(CoveTheme.inkSecondary)
+                        .multilineTextAlignment(.center)
+                        // Fewer lines once there are rows below competing for
+                        // the same 100pt: the sentence is the introduction, the
+                        // rows are the answer.
+                        .lineLimit(links.isEmpty ? 4 : 2)
+                        .frame(maxWidth: .infinity)
+                }
+
+                ForEach(links) { item in
+                    IslandCaptureLink(item: item)
+                }
+            }
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: height, alignment: .center)
+        }
+        .scrollIndicators(.never)
+        // No rubber-banding on an answer that already fits, which on a panel
+        // this small reads as the whole face coming loose.
+        .scrollBounceBehavior(.basedOnSize)
+        .transition(.opacity)
     }
 
     // MARK: - Prompt
@@ -307,23 +371,50 @@ struct HomePanel: View {
         guard !question.isEmpty, !isThinking else { return }
         model.promptText = ""
         isThinking = true
+        // A new question supersedes what is on screen, including the countdown
+        // that was going to clear it.
+        dismissal?.cancel()
+        dismissal = nil
+        answer = nil
 
         Task {
             // Continues the newest thread, which on this surface is the only one
             // reachable: the island shows one conversation, and starting a
             // second is something the window's chat screen does.
-            let reply = await CoveChat.ask(
+            let exchange = await CoveChat.ask(
                 question,
                 in: threads.first,
                 shelf: items,
                 context: modelContext
-            )?.reply
+            )
 
+            let reply = exchange.map { Answer(text: $0.reply, links: $0.links) }
             withAnimation(.easeInOut(duration: 0.2)) {
                 isThinking = false
                 answer = reply
             }
+            scheduleDismissal(of: reply)
+        }
+    }
+
+    /// How long an answer stays up.
+    ///
+    /// A sentence has been read long before the panel would close on its own,
+    /// so it goes on a timer as it always has. Links have not been *used* by
+    /// then — they are there to be chosen between, and a chooser that clears
+    /// itself while you are still deciding is worse than not having offered.
+    /// Those stay until the island closes or something else is asked.
+    private func scheduleDismissal(of reply: Answer?) {
+        dismissal?.cancel()
+
+        guard let reply, CaptureLinks.resolve(reply.links, in: items).isEmpty else {
+            dismissal = nil
+            return
+        }
+
+        dismissal = Task {
             try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
             withAnimation(.easeInOut(duration: 0.25)) { answer = nil }
         }
     }
@@ -411,6 +502,11 @@ private struct OnePageAtATime: ScrollTargetBehavior {
 /// brings the list back.
 private struct ChatHistoryPage: View {
     let threads: [ChatThread]
+
+    /// The shelf, only so a turn's offered captures can be resolved back to
+    /// what they point at. A reply no longer writes addresses into its text, so
+    /// without this the links a past answer held out would be gone from it.
+    @Query(sort: \ShelfItem.createdAt, order: .reverse) private var items: [ShelfItem]
 
     @State private var openThread: ChatThread?
 
@@ -536,22 +632,35 @@ private struct ChatHistoryPage: View {
     /// what.
     private func bubble(_ turn: ChatTurn) -> some View {
         let isUser = turn.role == .user
+        let links = CaptureLinks.resolve(turn.linkedItemIDs, in: items)
 
-        return Text(turn.text)
-            .font(.system(size: 10))
-            // The user's bubble is filled with the accent, so its text is
-            // whatever reads on the accent the user picked — not always the
-            // cream the rest of the transcript uses.
-            .foregroundStyle(isUser ? CoveTheme.onAccent : CoveTheme.ink)
-            .multilineTextAlignment(.leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(
-                isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(CoveTheme.raised),
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-            )
-            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-            .textSelection(.enabled)
+        return VStack(alignment: .leading, spacing: 7) {
+            if !turn.text.isEmpty {
+                Text(turn.text)
+                    .font(.system(size: 10))
+                    // The user's bubble is filled with the accent, so its text
+                    // is whatever reads on the accent the user picked — not
+                    // always the cream the rest of the transcript uses.
+                    .foregroundStyle(isUser ? CoveTheme.onAccent : CoveTheme.ink)
+                    .multilineTextAlignment(.leading)
+                    .textSelection(.enabled)
+            }
+
+            // Still clickable a week later. The transcript is where an answer
+            // goes once the island has collapsed, so the offer has to survive
+            // the trip — otherwise the history keeps the sentence about two
+            // links and loses the two links.
+            ForEach(links) { item in
+                IslandCaptureLink(item: item)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            isUser ? AnyShapeStyle(CoveTheme.accent) : AnyShapeStyle(CoveTheme.raised),
+            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+        )
+        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
 
     private func header(_ text: String) -> some View {

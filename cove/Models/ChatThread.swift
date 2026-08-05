@@ -42,8 +42,13 @@ final class ChatThread {
     /// `turns` side is set — the inverse fills `thread` in, and doing both
     /// would register the same object twice.
     @discardableResult
-    func append(role: ChatRole, text: String, at date: Date = .now) -> ChatTurn {
-        let turn = ChatTurn(role: role, text: text, createdAt: date)
+    func append(
+        role: ChatRole,
+        text: String,
+        links: [UUID] = [],
+        at date: Date = .now
+    ) -> ChatTurn {
+        let turn = ChatTurn(role: role, text: text, links: links, createdAt: date)
         turns.append(turn)
         updatedAt = date
         if title.isEmpty, role == .user {
@@ -65,6 +70,19 @@ final class ChatTurn {
     var createdAt: Date
     var roleRawValue: String
     var text: String
+    /// The captures Cove held out with this turn, by shelf id.
+    ///
+    /// Stored rather than re-derived, because there is nothing left to derive
+    /// them from: an answer no longer types out addresses, so "the two YouTube
+    /// links" is only a sentence unless the ids came with it. Kept as strings
+    /// for the same reason the role is — the column outlives what is written in
+    /// it, and a row whose capture has since been deleted simply resolves to
+    /// nothing rather than to a broken reference.
+    /// Defaulted, and that is what makes this a lightweight migration rather
+    /// than a schema version: every turn already in the store gets an empty
+    /// list, which is the truth about them — they were answered before Cove
+    /// offered anything.
+    var linkedItemIDRawValues: [String] = []
     var thread: ChatThread?
 
     var role: ChatRole {
@@ -72,10 +90,22 @@ final class ChatTurn {
         set { roleRawValue = newValue.rawValue }
     }
 
-    init(id: UUID = UUID(), role: ChatRole, text: String, createdAt: Date = .now) {
+    var linkedItemIDs: [UUID] {
+        get { linkedItemIDRawValues.compactMap(UUID.init(uuidString:)) }
+        set { linkedItemIDRawValues = newValue.map(\.uuidString) }
+    }
+
+    init(
+        id: UUID = UUID(),
+        role: ChatRole,
+        text: String,
+        links: [UUID] = [],
+        createdAt: Date = .now
+    ) {
         self.id = id
         self.createdAt = createdAt
         self.roleRawValue = role.rawValue
         self.text = text
+        self.linkedItemIDRawValues = links.map(\.uuidString)
     }
 }

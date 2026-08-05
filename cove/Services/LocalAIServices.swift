@@ -124,9 +124,8 @@ nonisolated struct KeywordSearchService: SearchService {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return items }
 
-        let terms = trimmed.lowercased()
-            .split(whereSeparator: \.isWhitespace)
-            .map(String.init)
+        let terms = Self.terms(in: trimmed)
+        guard !terms.isEmpty else { return items }
 
         return items
             .compactMap { item -> (item: ShelfItem, score: Int)? in
@@ -159,11 +158,14 @@ nonisolated struct KeywordSearchService: SearchService {
     /// always sorts above one matching some of them, and the partial matches
     /// sit below rather than being thrown away.
     private static func score(_ item: ShelfItem, terms: [String]) -> Int {
+        // Split once per item rather than once per (item, term): the words are
+        // the same whichever term is being asked about.
+        let fields = Fields(item)
         var total = 0
         var matched = 0
 
         for term in terms {
-            let termScore = weight(of: item, for: term)
+            let termScore = fields.weight(for: term)
             guard termScore > 0 else { continue }
             matched += 1
             total += termScore
@@ -173,27 +175,103 @@ nonisolated struct KeywordSearchService: SearchService {
         return matched * 100 + total
     }
 
-    /// Where the hit landed. A title hit is what the user named the thing, an
-    /// extracted-text hit is a word that happened to be inside a screenshot.
-    private static func weight(of item: ShelfItem, for term: String) -> Int {
-        var score = 0
-        if item.title.localizedCaseInsensitiveContains(term) { score += 8 }
-        if item.tags.contains(where: { $0.localizedCaseInsensitiveContains(term) }) {
-            score += 5
-        }
-        if item.userNote?.localizedCaseInsensitiveContains(term) == true { score += 4 }
-        if item.linkHost?.localizedCaseInsensitiveContains(term) == true { score += 4 }
-        if item.summary?.localizedCaseInsensitiveContains(term) == true { score += 3 }
-        if item.extractedText?.localizedCaseInsensitiveContains(term) == true { score += 2 }
-        if item.sourceApp?.localizedCaseInsensitiveContains(term) == true { score += 2 }
-        // The URL itself, which was never searched. It is the weakest signal —
-        // it is full of slugs and ids nobody types — but it is also the only
-        // place a word like "watch" or a video id lives.
-        if item.linkURL?.absoluteString.localizedCaseInsensitiveContains(term) == true {
-            score += 2
-        }
-        return score
+    /// The words of the query worth searching for.
+    ///
+    /// Stop words are dropped, and this is not tidiness — it was the difference
+    /// between a search and a shuffle. Every term used to be scored, and
+    /// `matched * 100` rewards *how many* of them an item hits, so "somewhere to
+    /// walk at the weekend" ranked by how many of "to", "at" and "the" a capture
+    /// contained. On a 25-capture shelf that query returned 24 of them.
+    ///
+    /// The fallback matters as much as the filter: if everything typed was a
+    /// stop word, they are put back. Someone searching for "the" on a shelf of
+    /// film titles means it.
+    static func terms(in query: String) -> [String] {
+        let all = query
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+
+        let meaningful = all.filter { $0.count > 2 && !stopWords.contains($0) }
+        return meaningful.isEmpty ? all : meaningful
     }
+
+    /// One item's searchable text, split into words.
+    ///
+    /// Words, and that is the fix. Matching used to be
+    /// `localizedCaseInsensitiveContains`, which is substring-anywhere: "in"
+    /// matched "hiking", "migrations", "confirmation" and "Nilgiris", so short
+    /// terms hit nearly the whole shelf and the ranking was driven by noise.
+    /// This costs the same and asks the question that was meant.
+    ///
+    /// Prefix rather than equality, so "hill" still finds "hills" and "youtub"
+    /// still finds "youtube" — a term has to start a word, not merely occur
+    /// somewhere inside one.
+    private struct Fields {
+        let title: [String]
+        let tags: [String]
+        let note: [String]
+        let host: [String]
+        let summary: [String]
+        let extracted: [String]
+        let sourceApp: [String]
+        let address: [String]
+
+        init(_ item: ShelfItem) {
+            title = Self.words(item.title)
+            tags = item.tags.flatMap(Self.words)
+            note = Self.words(item.userNote)
+            host = Self.words(item.linkHost)
+            summary = Self.words(item.summary)
+            extracted = Self.words(item.extractedText)
+            sourceApp = Self.words(item.sourceApp)
+            address = Self.words(item.linkURL?.absoluteString)
+        }
+
+        /// Where the hit landed. A title hit is what the user named the thing,
+        /// an extracted-text hit is a word that happened to be inside a
+        /// screenshot.
+        func weight(for term: String) -> Int {
+            var score = 0
+            if Self.hit(term, title) { score += 8 }
+            if Self.hit(term, tags) { score += 5 }
+            if Self.hit(term, note) { score += 4 }
+            if Self.hit(term, host) { score += 4 }
+            if Self.hit(term, summary) { score += 3 }
+            if Self.hit(term, extracted) { score += 2 }
+            if Self.hit(term, sourceApp) { score += 2 }
+            // The address itself. The weakest signal — it is full of slugs and
+            // ids nobody types — but also the only place a word like "watch" or
+            // a video id lives.
+            if Self.hit(term, address) { score += 2 }
+            return score
+        }
+
+        private static func hit(_ term: String, _ words: [String]) -> Bool {
+            words.contains { $0.hasPrefix(term) }
+        }
+
+        private static func words(_ value: String?) -> [String] {
+            guard let value else { return [] }
+            return value
+                .lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+        }
+    }
+
+    /// Words too common to tell two captures apart. Kept short on purpose: this
+    /// only has to cover what people pad a spoken-sounding query with.
+    private static let stopWords: Set<String> = [
+        "the", "and", "for", "was", "were", "are", "any", "all", "can", "did",
+        "does", "have", "has", "had", "how", "into", "its", "it's", "not", "our",
+        "out", "own", "she", "that", "them", "then", "there", "these", "they",
+        "this", "those", "was", "what", "when", "where", "which", "who", "will",
+        "with", "would", "you", "your", "about", "from", "some", "something",
+        "somewhere", "anything", "there's", "get", "got", "let", "put", "see",
+        "want", "need", "make", "made", "just", "like", "know", "http", "https",
+        "www", "com"
+    ]
 }
 
 /// Keyword search and the stored vectors, fused.
@@ -245,9 +323,25 @@ nonisolated struct SemanticSearchService: SearchService {
     private static let outlierDeviations: Float = 2
 
     /// Below this many scored items the mean and deviation are not describing a
-    /// distribution, they are describing three numbers. Keyword search alone
-    /// covers a shelf this small perfectly well.
-    private static let minimumSampleSize = 5
+    /// distribution, they are describing a handful of numbers. Keyword search
+    /// alone covers a shelf this small perfectly well.
+    ///
+    /// Twelve rather than five, and the reason is arithmetic rather than taste.
+    /// The largest z-score `n` samples can produce is `(n - 1) / √n`: one item
+    /// alone at the top with everything else tied beneath it. That ceiling is
+    /// 1.79 at n = 5 — *below* the 2σ cut above — so on a five-capture shelf the
+    /// test was not strict, it was unsatisfiable, and the vector half returned
+    /// nothing no matter how well something matched. It stays under 2.5 until
+    /// about n = 8.
+    ///
+    /// Lowering the cut instead was the obvious alternative and it is worse.
+    /// Measured on a seven-capture shelf, a clean semantic hit ("bread" → a
+    /// sourdough note) scored z = 1.55 while pure gibberish scored z = 1.60:
+    /// there is no threshold down there that admits the first and rejects the
+    /// second, because at that size the distribution genuinely cannot tell them
+    /// apart. Being honestly keyword-only until the shelf is big enough beats
+    /// answering from noise.
+    private static let minimumSampleSize = 12
 
     @MainActor
     func search(_ query: String, in items: [ShelfItem]) async throws -> [ShelfItem] {
