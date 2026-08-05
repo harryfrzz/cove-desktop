@@ -115,6 +115,7 @@ private struct CoveWindowView: View {
     @State private var selection: Set<UUID> = []
     @State private var pendingDelete: [ShelfItem] = []
     @State private var isShowingSettings = false
+    @State private var isShowingChats = false
     /// Narrows the library to one kind of thing. Not persisted: a filter that
     /// outlived the session would hide captures the user knows they saved.
     @State private var filter: ShelfFilter = .all
@@ -155,6 +156,70 @@ private struct CoveWindowView: View {
     private static let implodeDuration: Duration = .milliseconds(660)
 
     var body: some View {
+        screens
+            .background(CoveTheme.windowBackground)
+            .accessibilityIdentifier("cove-library-window")
+            // Runs when the shelf appears and again on every reopen. One task
+            // rather than an onAppear/onChange/onDisappear trio, because it also
+            // gets the cancellation right: closing the window mid-entrance
+            // leaves the shelf at rest, ready to pop again next time.
+            .task(id: model.openCount) { await playEntrance() }
+            .task(id: searchText) { await runSearch() }
+            // The window title is the only place a screen names itself, so it
+            // follows the screen rather than staying on the app's name.
+            .navigationTitle(title)
+            .toolbar { toolbarContent }
+            .sheet(isPresented: $isShowingSettings) {
+                SettingsView()
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: { selectedItem != nil },
+                    set: { if !$0 { selectedItem = nil } }
+                )
+            ) {
+                Group {
+                    if let selectedItem {
+                        ShelfItemDetailView(item: selectedItem)
+                    }
+                }
+            }
+            .sheet(isPresented: $isAddingLink) {
+                AddLinkSheet(onAdd: addLink)
+            }
+            .sheet(isPresented: $isAddingNote) {
+                AddNoteSheet(onAdd: addNote)
+            }
+            .confirmationDialog(
+                pendingDelete.count == 1
+                    ? "Delete this item?"
+                    : "Delete \(pendingDelete.count) items?",
+                isPresented: Binding(
+                    get: { !pendingDelete.isEmpty },
+                    set: { if !$0 { pendingDelete = [] } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive, action: confirmDelete)
+                Button("Cancel", role: .cancel) { pendingDelete = [] }
+            } message: {
+                Text("Removed from this Mac for good.")
+            }
+    }
+
+    private var title: String {
+        if isShowingChats { return "Chats" }
+        return openAlbum?.title ?? "Cove"
+    }
+
+    /// The three screens the window can be showing, and the lifted card over
+    /// them.
+    ///
+    /// Split out of `body`, along with the toolbar and the sheets, because the
+    /// compiler had started reporting that it could not type-check the whole
+    /// thing in reasonable time. That is a warning one addition away from
+    /// becoming a build failure, not a style note.
+    private var screens: some View {
         // A navigation stack would own the transition, and its push is a slide
         // that fights the burst. Swapping the screens directly keeps both
         // directions of the animation here, where the pile frames already live.
@@ -174,6 +239,14 @@ private struct CoveWindowView: View {
                             focus = ShelfFocusTarget(itemID: item.id, frame: frame)
                         }
                     )
+                }
+
+                // Last, so it covers both. Chats is not a layer over the shelf
+                // the way the focus overlay is — it is somewhere else the window
+                // can be, and it draws its own background to say so.
+                if isShowingChats {
+                    ChatHistoryScreen()
+                        .transition(.opacity)
                 }
             }
             // The shelf recedes so one item can be looked at. Disabling it as
@@ -199,28 +272,28 @@ private struct CoveWindowView: View {
                 focusOverlay(focus, item: item)
             }
         }
-        .background(CoveTheme.windowBackground)
-        .accessibilityIdentifier("cove-library-window")
-        // Runs when the shelf appears and again on every reopen. One task
-        // rather than an onAppear/onChange/onDisappear trio, because it also
-        // gets the cancellation right: closing the window mid-entrance leaves
-        // the shelf at rest, ready to pop again next time.
-        .task(id: model.openCount) { await playEntrance() }
-        .task(id: searchText) { await runSearch() }
-        // The window title is the only place a screen names itself, so it
-        // follows the screen rather than staying on the app's name.
-        .navigationTitle(openAlbum?.title ?? "Cove")
-        // One toolbar for the window, switching with the screen. Two screens
-        // each declaring their own would both stay live — the library never
-        // leaves the hierarchy — and their items would stack up.
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                if openAlbum != nil {
-                    backButton
-                }
-            }
+    }
 
-            ToolbarItemGroup(placement: .primaryAction) {
+    /// One toolbar for the window, switching with the screen. Three screens each
+    /// declaring their own would all stay live — the library never leaves the
+    /// hierarchy — and their items would stack up.
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            // Both the album and the chats are screens the window went into, so
+            // both leave by the same door.
+            if openAlbum != nil || isShowingChats {
+                backButton
+            }
+        }
+
+        ToolbarItemGroup(placement: .primaryAction) {
+            if isShowingChats {
+                // Nothing else on this screen acts on the shelf, and a Refresh
+                // that reprocessed every capture from inside a conversation
+                // would be a button with no visible effect and a long one.
+                settingsButton
+            } else {
                 // Selecting only exists inside an album. On the library screen
                 // the things on show are piles and a pile is not a thing that
                 // can be picked or deleted — offering Select there put the
@@ -246,44 +319,9 @@ private struct CoveWindowView: View {
                     refreshButton
                 }
 
+                historyButton
                 settingsButton
             }
-        }
-        .sheet(isPresented: $isShowingSettings) {
-            SettingsView()
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { selectedItem != nil },
-                set: { if !$0 { selectedItem = nil } }
-            )
-        ) {
-            Group {
-                if let selectedItem {
-                    ShelfItemDetailView(item: selectedItem)
-                }
-            }
-        }
-        .sheet(isPresented: $isAddingLink) {
-            AddLinkSheet(onAdd: addLink)
-        }
-        .sheet(isPresented: $isAddingNote) {
-            AddNoteSheet(onAdd: addNote)
-        }
-        .confirmationDialog(
-            pendingDelete.count == 1
-                ? "Delete this item?"
-                : "Delete \(pendingDelete.count) items?",
-            isPresented: Binding(
-                get: { !pendingDelete.isEmpty },
-                set: { if !$0 { pendingDelete = [] } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive, action: confirmDelete)
-            Button("Cancel", role: .cancel) { pendingDelete = [] }
-        } message: {
-            Text("Removed from this Mac for good.")
         }
     }
 
@@ -403,12 +441,24 @@ private struct CoveWindowView: View {
     }
 
     private var backButton: some View {
-        Button(action: closeAlbum) {
+        Button(action: goBack) {
             Label("Back", systemImage: "chevron.left")
                 .labelStyle(.iconOnly)
         }
-        .opacity(albumChrome)
+        // The fade belongs to the album's implode; chats leaves by a plain
+        // crossfade and must not inherit a chrome value the album left behind.
+        .opacity(isShowingChats ? 1 : albumChrome)
         .accessibilityLabel("Back to library")
+    }
+
+    /// Leaves whichever screen the window went into. Chats first: it is drawn
+    /// over the album, so it is the one being looked at when both are up.
+    private func goBack() {
+        if isShowingChats {
+            withAnimation(.easeOut(duration: 0.2)) { isShowingChats = false }
+            return
+        }
+        closeAlbum()
     }
 
     @MainActor
@@ -681,6 +731,15 @@ private struct CoveWindowView: View {
         }
         .disabled(model.isRefreshing)
         .accessibilityHint("Reprocesses the shelf with the current OCR, enrichment, and embedding services")
+    }
+
+    private var historyButton: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) { isShowingChats = true }
+        } label: {
+            Label("Chats", systemImage: "bubble.left.and.bubble.right")
+        }
+        .accessibilityHint("Shows what you have asked Cove, and what it said back")
     }
 
     private var settingsButton: some View {

@@ -290,17 +290,18 @@ struct HomePanel: View {
     }
 
     /// Asks the on-device model, grounded in the captures that best match the
-    /// question, and stores both sides of the exchange.
+    /// question, and shows the reply where the mark was.
     ///
     /// Two things here are deliberate. The shimmer now covers real work, so
     /// there is no sleep: it lasts exactly as long as the model takes, which is
-    /// what a working indicator is for. And the reply is written after the
-    /// answer exists rather than before — the version this replaced inserted
-    /// both turns up front and then waited 900ms to reveal a string it already
-    /// had, which is the shape of a fake.
+    /// what a working indicator is for. And the reply is shown after the answer
+    /// exists rather than before — the version this replaced inserted both turns
+    /// up front and then waited 900ms to reveal a string it already had, which
+    /// is the shape of a fake.
     ///
-    /// The question is still saved when the answer fails. Whatever went wrong
-    /// with the model, the user typed something and the history should show it.
+    /// Retrieval, the model, and the store are `CoveChat`'s, not this view's.
+    /// The chat screen in the window asks the same way, and the two must not
+    /// answer the question of what asking means differently.
     private func submit() {
         let question = model.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !isThinking else { return }
@@ -308,29 +309,15 @@ struct HomePanel: View {
         isThinking = true
 
         Task {
-            // Retrieval first, so the model reads the shelf rather than
-            // improvising about it. This is the same search the library runs,
-            // which since the embeddings landed means a question can reach a
-            // capture that never contained its words.
-            let matches = (try? await AIServices.current.search.search(question, in: items)) ?? []
-            // Topped up with what is recent when the search came back thin, so
-            // the model is never asked about a shelf it cannot see.
-            let grounding = assistant.grounding(matches: matches, recent: items)
-
-            let reply: String
-            do {
-                reply = try await assistant.answer(
-                    to: question,
-                    grounding: grounding,
-                    matched: !matches.isEmpty
-                )
-            } catch {
-                // Said in Cove’s voice, and true: no answer was produced. The
-                // one thing it must not do is read like one.
-                reply = error.localizedDescription
-            }
-
-            record(question: question, reply: reply)
+            // Continues the newest thread, which on this surface is the only one
+            // reachable: the island shows one conversation, and starting a
+            // second is something the window's chat screen does.
+            let reply = await CoveChat.ask(
+                question,
+                in: threads.first,
+                shelf: items,
+                context: modelContext
+            )?.reply
 
             withAnimation(.easeInOut(duration: 0.2)) {
                 isThinking = false
@@ -339,20 +326,6 @@ struct HomePanel: View {
             try? await Task.sleep(for: .seconds(6))
             withAnimation(.easeInOut(duration: 0.25)) { answer = nil }
         }
-    }
-
-    private func record(question: String, reply: String) {
-        let thread: ChatThread
-        if let existing = threads.first {
-            thread = existing
-        } else {
-            thread = ChatThread()
-            modelContext.insert(thread)
-        }
-
-        modelContext.insert(thread.append(role: .user, text: question))
-        modelContext.insert(thread.append(role: .assistant, text: reply))
-        try? modelContext.save()
     }
 
     // MARK: - Screenshots
