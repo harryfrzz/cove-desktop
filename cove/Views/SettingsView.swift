@@ -297,6 +297,30 @@ struct SettingsView: View {
                 await connections.connectNotes()
             }
 
+            // Why the last attempt did not take. Nothing at all when it did, so
+            // this is only ever on screen when there is something to explain —
+            // and it is the difference between a button that failed and a
+            // button that appears not to be connected to anything.
+            if let problem = connections.problem {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(problem)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Button("Open System Settings") {
+                            CoveConnections.openPrivacySettings()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                .padding(.top, 4)
+            }
+
             Text("Cove only writes to these when you ask it to, and tells you exactly what it did. Nothing is read back.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

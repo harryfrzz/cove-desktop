@@ -76,18 +76,31 @@ final class CoveConnections {
 
     // MARK: - Asking
 
+    /// Why the last attempt to connect did not end in a grant, in words meant
+    /// for the person who pressed the button. `nil` when nothing has been tried,
+    /// or the last try worked.
+    ///
+    /// This exists because the failure used to be silent. Every path that was
+    /// not a grant — the request throwing, macOS declining to show a prompt at
+    /// all — landed in an empty `if` block, `refresh()` put the state back to
+    /// exactly what it already was, and the button went on saying "Connect".
+    /// Pressing it did nothing and said nothing, which is indistinguishable
+    /// from the button not being wired up.
+    private(set) var problem: String?
+
     func connectCalendar() async {
-        if (try? await events.requestFullAccessToEvents()) == nil {
-            // A throw here is the user having said no, or the entitlement being
-            // absent. Either way the answer is the same to everyone upstream.
-        }
+        problem = nil
+        _ = try? await events.requestFullAccessToEvents()
         refresh()
+        problem = Self.problem(asking: "Calendar", ended: calendar)
         sessionNeedsRebuilding()
     }
 
     func connectReminders() async {
+        problem = nil
         _ = try? await events.requestFullAccessToReminders()
         refresh()
+        problem = Self.problem(asking: "Reminders", ended: reminders)
         sessionNeedsRebuilding()
     }
 
@@ -96,8 +109,38 @@ final class CoveConnections {
     /// it without also sending a command — the alternative is firing a script
     /// and reading the failure, which launches Notes to find out.
     func connectNotes() async {
+        problem = nil
         notes = Self.automationAccess(for: Self.notesBundleID, askIfNeeded: true)
+        problem = Self.problem(asking: "Notes", ended: notes)
         sessionNeedsRebuilding()
+    }
+
+    /// What to say when asking did not end in a grant.
+    ///
+    /// The third case is the interesting one and the reason this is worded
+    /// rather than logged. Coming back still `notAsked` means macOS did not put
+    /// the prompt on screen — which it does not when the app was launched by a
+    /// debugger, because the request is attributed to the debugger's process
+    /// instead. Nothing is broken and nothing the user does inside Cove will
+    /// fix it, so the only useful thing to say is where the switch actually
+    /// lives.
+    private static func problem(asking app: String, ended access: Access) -> String? {
+        switch access {
+        case .granted:
+            nil
+        case .denied:
+            "\(app) access was refused. You can change that in System Settings › Privacy & Security › \(app)."
+        case .notAsked:
+            "macOS didn’t show the prompt for \(app). Add Cove yourself in System Settings › Privacy & Security › \(app), or quit Cove, open it from Finder, and try again."
+        }
+    }
+
+    /// Somewhere to send them, for either problem above.
+    static func openPrivacySettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy"
+        ) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// The model is handed only the tools that currently work, so rebuilding the
