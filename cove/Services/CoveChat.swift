@@ -40,7 +40,7 @@ enum CoveChat {
         let cleaned = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
 
-        let reply = await answer(to: cleaned, shelf: items)
+        let reply = await answer(to: cleaned, in: thread, shelf: items)
 
         return Exchange(
             thread: record(cleaned, reply: reply, in: thread, context: context),
@@ -56,7 +56,11 @@ enum CoveChat {
     /// two halves are separate stacks — MobileCLIP's encoders and the shelf's
     /// own index are local files that have nothing to do with Apple's language
     /// model — so losing the second one costs the prose, not the search.
-    private static func answer(to question: String, shelf items: [ShelfItem]) async -> String {
+    private static func answer(
+        to question: String,
+        in thread: ChatThread?,
+        shelf items: [ShelfItem]
+    ) async -> String {
         // The same search the library runs, which since the embeddings landed
         // means a question can reach a capture that never contained its words:
         // keyword, query-to-text vector and query-to-image vector, fused.
@@ -68,6 +72,13 @@ enum CoveChat {
             return retrieved(matches, unavailable: reason)
 
         case .ready:
+            // Point the model at the conversation this question belongs to
+            // before asking it anything. Both surfaces reach the same assistant
+            // and the window can be sitting in any thread, so which transcript
+            // is loaded is decided here rather than left to whatever was asked
+            // last.
+            assistant.resume(thread)
+
             // Topped up with what is recent when the search came back thin, so
             // the model is never asked about a shelf it cannot see.
             let grounding = assistant.grounding(matches: matches, recent: items)

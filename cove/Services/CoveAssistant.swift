@@ -44,6 +44,18 @@ final class CoveAssistant {
     /// transcript lives in the session, so holding it is the whole feature.
     private var session: LanguageModelSession?
 
+    /// Which stored conversation the live session is carrying, so a switch can
+    /// be noticed. `nil` means an unsaved conversation — one that has been
+    /// started but not yet spoken into, which has no thread behind it yet.
+    ///
+    /// Without this there was one session for the life of the app and many
+    /// threads in the store, and the two had nothing to do with each other:
+    /// "New Chat" cleared the screen while the model went on remembering the
+    /// last conversation, and opening an old thread to ask a follow-up put the
+    /// question to a model holding somebody else's transcript. The history
+    /// looked like several conversations and behaved like one.
+    private var sessionThreadID: UUID?
+
     /// What "open it" is currently allowed to mean. Refreshed before every
     /// turn; see `ShelfOpenTargets`.
     private let openTargets = ShelfOpenTargets()
@@ -116,6 +128,39 @@ final class CoveAssistant {
             // and there is nothing to fix, so this says so briefly instead of
             // showing them a Swift error description.
             throw AssistantError.declined
+        } catch let error as LanguageModelSession.GenerationError {
+            throw Self.described(error)
+        }
+    }
+
+    /// Turns the framework's remaining generation failures into something worth
+    /// showing someone.
+    ///
+    /// Everything not caught above used to fall through to whatever
+    /// `localizedDescription` produced, which for these is the Foundation
+    /// default: "The operation couldn't be completed. (…GenerationError error
+    /// -1.)". That is bad enough on screen, and this is stored — a chat history
+    /// keeps it forever, in the same bubble a real answer would occupy.
+    ///
+    /// Each of these is either a wait-and-retry or a fact about the Mac, and is
+    /// said as such.
+    private static func described(_ error: LanguageModelSession.GenerationError) -> AssistantError {
+        switch error {
+        case .assetsUnavailable:
+            .unavailable("Apple Intelligence hasn’t finished installing its model.")
+        case .rateLimited:
+            .unavailable("Cove has asked the model too many times just now — try again in a moment.")
+        case .concurrentRequests:
+            .unavailable("Cove is still answering the last question.")
+        case .unsupportedLanguageOrLocale:
+            .unavailable("Apple Intelligence doesn’t support this Mac’s language yet.")
+        case .refusal:
+            .declined
+        // `decodingFailure`, `unsupportedGuide` and anything added later. These
+        // are faults in how Cove asked rather than anything the user did, so
+        // this says the true and useful part without inventing a cause.
+        default:
+            .unavailable("The model couldn’t answer that one — try asking it again.")
         }
     }
 
@@ -246,27 +291,89 @@ final class CoveAssistant {
             """
     }
 
-    /// The running session, started on first use.
+    /// Points the model at `thread`, rebuilding the session from what was
+    /// stored when it is currently carrying a different conversation.
     ///
-    /// Also the recovery point: a long enough conversation eventually fills the
-    /// context window, and the only cure is a new session. That is handled in
-    /// `answer(to:grounding:)` by dropping this and retrying once, which costs
-    /// the transcript and keeps the assistant answering — the alternative is a
-    /// panel that works all day and then refuses everything until relaunch.
+    /// Called before every question rather than when the user switches threads.
+    /// Switching is a thing they may do to read, and rebuilding a session for a
+    /// conversation nobody goes on to continue is work spent on nothing; asking
+    /// is the moment the model's memory has to be right.
+    ///
+    /// Rebuilding replays the stored turns, so returning to an old thread and
+    /// asking a follow-up works the way the screen implies it does. The replay
+    /// is not perfectly faithful and cannot be: a turn Cove answered while
+    /// Apple Intelligence was off is stored as an assistant reply and comes
+    /// back as one, so the model is handed a sentence it never said. That is
+    /// the honest record of what the user was shown, which is the thing worth
+    /// preserving here.
+    func resume(_ thread: ChatThread?) {
+        guard session == nil || thread?.id != sessionThreadID else { return }
+        session = makeSession(replaying: thread)
+        sessionThreadID = thread?.id
+    }
+
+    /// The running session, started on first use.
     private func resolvedSession() -> LanguageModelSession {
         if let session { return session }
-        let created = LanguageModelSession(
-            tools: [OpenCaptureTool(targets: openTargets)],
-            instructions: Self.instructions
-        )
+        let created = makeSession(replaying: nil)
         session = created
         return created
     }
 
+    private func makeSession(replaying thread: ChatThread?) -> LanguageModelSession {
+        let tool = OpenCaptureTool(targets: openTargets)
+
+        guard let thread, !thread.turns.isEmpty else {
+            return LanguageModelSession(tools: [tool], instructions: Self.instructions)
+        }
+
+        // Instructions have to be an entry rather than the initialiser's
+        // argument on this path: the transcript initialiser takes the whole
+        // conversation, and one that opened with a prompt would be a model
+        // that had never been told what it is.
+        var entries: [Transcript.Entry] = [
+            .instructions(
+                Transcript.Instructions(
+                    segments: [.text(Transcript.TextSegment(content: Self.instructions))],
+                    toolDefinitions: [Transcript.ToolDefinition(tool: tool)]
+                )
+            )
+        ]
+
+        // Only the tail. The window is finite, and an old thread long enough to
+        // fill it would arrive already overflowing — the recovery below would
+        // then fire on the first question and throw away the very transcript
+        // this was rebuilt to restore.
+        for turn in thread.orderedTurns.suffix(Self.replayLimit) {
+            let segment = Transcript.Segment.text(Transcript.TextSegment(content: turn.text))
+            switch turn.role {
+            case .user:
+                entries.append(.prompt(Transcript.Prompt(segments: [segment])))
+            case .assistant:
+                entries.append(.response(Transcript.Response(assetIDs: [], segments: [segment])))
+            }
+        }
+
+        return LanguageModelSession(tools: [tool], transcript: Transcript(entries: entries))
+    }
+
+    /// How many stored turns a rebuilt session replays.
+    ///
+    /// Turns, not exchanges, so this is roughly the last eight questions and
+    /// their answers.
+    private static let replayLimit = 16
+
     /// Forgets the conversation. The shelf is unaffected; only the transcript
     /// the model is carrying goes.
+    ///
+    /// Deliberately empties the session rather than dropping it: this is the
+    /// cure for a full context window, and a `nil` that the next question
+    /// rebuilt from the same thread would replay its way straight back into the
+    /// overflow it was called to escape. `sessionThreadID` is left alone for
+    /// the same reason — the session still belongs to this conversation, it has
+    /// simply forgotten it.
     func startNewConversation() {
-        session = nil
+        session = makeSession(replaying: nil)
     }
 
     /// One capture, flattened to the few facts worth spending tokens on.
@@ -318,12 +425,15 @@ final class CoveAssistant {
         case noModel
         case emptyAnswer
         case declined
+        /// A generation failure already phrased for the user. See `described`.
+        case unavailable(String)
 
         var errorDescription: String? {
             switch self {
             case .noModel: "Cove’s on-device model isn’t available on this Mac."
             case .emptyAnswer: "The model didn’t return an answer."
             case .declined: "The model wouldn’t answer that one — try asking it a different way."
+            case .unavailable(let reason): reason
             }
         }
     }
