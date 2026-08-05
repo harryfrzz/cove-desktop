@@ -469,6 +469,9 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Cove watches the folder macOS saves screenshots to, so it can offer each new one on the island.";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Cove watches the folder macOS saves screenshots to, so it can offer each new one on the island.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Cove writes notes you ask it to save into the Notes app.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Cove adds events to your calendar when you ask it to.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Cove adds reminders to your Reminders lists when you ask it to.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -505,6 +508,9 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Cove watches the folder macOS saves screenshots to, so it can offer each new one on the island.";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Cove watches the folder macOS saves screenshots to, so it can offer each new one on the island.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Cove writes notes you ask it to save into the Notes app.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Cove adds events to your calendar when you ask it to.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Cove adds reminders to your Reminders lists when you ask it to.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

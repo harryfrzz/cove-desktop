@@ -23,6 +23,7 @@ struct SettingsView: View {
     /// finishing its download while this page is open.
     @State private var assistant = CoveAssistant.shared
     @State private var onboarding = CoveOnboarding.shared
+    @State private var connections = CoveConnections.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +38,7 @@ struct SettingsView: View {
                     screenshotSection
                     holdingSection
                     modelSection
+                    connectionsSection
                     shelfSection
                     privacySection
                     updatesSection
@@ -272,6 +274,71 @@ struct SettingsView: View {
                 }
             }
             .padding(.top, 4)
+        }
+    }
+
+    /// Calendar, Reminders and Notes — what Cove may reach, and what it does
+    /// with each.
+    ///
+    /// Per-app rather than one switch, because the grants are separate in the
+    /// system and pretending otherwise would mean a control that is half on. A
+    /// refusal is not offered a second button: macOS will not re-prompt once
+    /// an answer is on file, so the only honest thing to point at is System
+    /// Settings.
+    private var connectionsSection: some View {
+        SettingsSection("Connections") {
+            connectionRow("Calendar", access: connections.calendar) {
+                await connections.connectCalendar()
+            }
+            connectionRow("Reminders", access: connections.reminders) {
+                await connections.connectReminders()
+            }
+            connectionRow("Notes", access: connections.notes) {
+                await connections.connectNotes()
+            }
+
+            Text("Cove only writes to these when you ask it to, and tells you exactly what it did. Nothing is read back.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+
+            if ConnectionsBannerState.shared.isDismissed {
+                Button("Show Connection Banner Again") {
+                    ConnectionsBannerState.shared.restore()
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private func connectionRow(
+        _ name: String,
+        access: CoveConnections.Access,
+        connect: @escaping () async -> Void
+    ) -> some View {
+        HStack {
+            Text(name)
+                .font(.callout)
+
+            Spacer()
+
+            switch access {
+            case .granted:
+                Text("Connected")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            case .notAsked:
+                Button("Connect") { Task { await connect() } }
+            case .denied:
+                // Deliberately not a "Connect" button. Asking again does
+                // nothing once macOS has an answer on file, and a button that
+                // silently fails is worse than a signpost.
+                Button("Open System Settings") {
+                    NSWorkspace.shared.open(
+                        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!
+                    )
+                }
+            }
         }
     }
 

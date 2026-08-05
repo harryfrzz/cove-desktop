@@ -225,6 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // changing it means going to the Screenshot app, which means having been
         // somewhere other than here.
         ScreenshotWatcher.shared.refreshLocation()
+        // For the same reason, and it matters more here: these are revocable in
+        // System Settings, and a grant believed after it was taken away means
+        // handing the model a tool that can no longer work.
+        CoveConnections.shared.refresh()
 
         let defaults = UserDefaults(suiteName: PasteIntoCoveIntent.appGroupID)
 

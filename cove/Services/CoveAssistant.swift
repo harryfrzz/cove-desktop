@@ -469,6 +469,14 @@ final class CoveAssistant {
         If the captures do not hold the answer, say so plainly. Never invent a \
         price, date, order number or name.
 
+        You cannot touch Calendar, Reminders or Notes yourself. The only way \
+        anything is added to them is a tool call that comes back saying it \
+        worked. Never say you have added, created, saved or scheduled \
+        something unless a tool told you so in this turn. If a tool replies \
+        FAILED, tell them plainly it did not happen and why. If you have no \
+        tool for what they asked, say Cove is not connected to that app. \
+        Never invent a date they did not give you — ask.
+
         One or two short sentences. No preamble, no bullet points.
         """
 
@@ -635,11 +643,47 @@ final class CoveAssistant {
         return created
     }
 
+    /// What the model may call this session.
+    ///
+    /// The system tools are included only when their connection is actually
+    /// granted, and that is a context decision before it is a safety one: the
+    /// window is 4096 tokens and every tool definition is spent before the
+    /// conversation starts. A user who has connected nothing should not pay for
+    /// three descriptions of things Cove cannot do.
+    ///
+    /// It is not the anti-hallucination mechanism. That is the instructions plus
+    /// the tools' own failure wording — a missing tool does not stop a model
+    /// claiming it added an event, so the rule has to be stated either way.
+    ///
+    /// Both lists are built together, and they have to be:
+    /// `Transcript.ToolDefinition.init(tool:)` is generic over a concrete `Tool`,
+    /// so it cannot be mapped over `[any Tool]` after the fact — the existential
+    /// has already thrown away the type it needs. Adding each one through a
+    /// generic function is what keeps that type in hand for both uses.
+    private func toolset() -> (tools: [any Tool], definitions: [Transcript.ToolDefinition]) {
+        var tools: [any Tool] = []
+        var definitions: [Transcript.ToolDefinition] = []
+
+        func add(_ tool: some Tool) {
+            tools.append(tool)
+            definitions.append(Transcript.ToolDefinition(tool: tool))
+        }
+
+        add(ShowCapturesTool(offers: offers))
+
+        let connections = CoveConnections.shared
+        if connections.calendar.isGranted { add(AddCalendarEventTool()) }
+        if connections.reminders.isGranted { add(AddReminderTool()) }
+        if connections.notes.isGranted { add(CreateNoteTool()) }
+
+        return (tools, definitions)
+    }
+
     private func makeSession(replaying thread: ChatThread?) -> LanguageModelSession {
-        let tool = ShowCapturesTool(offers: offers)
+        let (tools, definitions) = toolset()
 
         guard let thread, !thread.turns.isEmpty else {
-            return LanguageModelSession(tools: [tool], instructions: Self.instructions)
+            return LanguageModelSession(tools: tools, instructions: Self.instructions)
         }
 
         // Instructions have to be an entry rather than the initialiser's
@@ -650,7 +694,7 @@ final class CoveAssistant {
             .instructions(
                 Transcript.Instructions(
                     segments: [.text(Transcript.TextSegment(content: Self.instructions))],
-                    toolDefinitions: [Transcript.ToolDefinition(tool: tool)]
+                    toolDefinitions: definitions
                 )
             )
         ]
@@ -670,7 +714,7 @@ final class CoveAssistant {
             }
         }
 
-        return LanguageModelSession(tools: [tool], transcript: Transcript(entries: entries))
+        return LanguageModelSession(tools: tools, transcript: Transcript(entries: entries))
     }
 
     /// How many stored turns a rebuilt session replays.

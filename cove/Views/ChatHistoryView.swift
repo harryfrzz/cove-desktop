@@ -162,6 +162,11 @@ struct ChatHistoryScreen: View {
 
     private var conversation: some View {
         VStack(spacing: 0) {
+            // Above the transcript rather than over it: this is about what
+            // asking can do, so it belongs where the asking is read, and it must
+            // not cover the last thing Cove said.
+            ConnectionsBanner()
+
             transcript
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
