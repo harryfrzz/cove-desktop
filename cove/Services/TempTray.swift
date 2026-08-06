@@ -110,6 +110,46 @@ final class TempTray {
     /// rather than oldest: it is the one the user just put down.
     var latest: Entry? { entries.last }
 
+    // MARK: - What the next question is about
+
+    /// The one thing the next question is about, if the user has said so.
+    ///
+    /// Deliberately not a member of `entries`. Holding and asking are different
+    /// answers to a drop — one says "carry this for me", the other says "look at
+    /// this" — and folding the second into the first would put everything ever
+    /// asked about onto the holding shelf, where it would sit until Cove quit.
+    /// A thing already held can be attached too, and then it is both, which is
+    /// the only case where one entry is in two places at once.
+    ///
+    /// Lives until the question is asked or the island closes. That is short on
+    /// purpose: the alternative is a chip set on the island still silently
+    /// attached to a question typed in the window an hour later.
+    private(set) var attached: Entry?
+
+    func attach(_ entry: Entry) {
+        attached = entry
+        announce()
+    }
+
+    func detach() {
+        guard attached != nil else { return }
+        attached = nil
+        announce()
+    }
+
+    /// Attaches whatever was dropped on Ask Cove. Returns false when the
+    /// pasteboard held nothing Cove can read, so the island can say so rather
+    /// than opening a prompt bar about nothing.
+    @discardableResult
+    func attach(pasteboard: NSPasteboard) -> Bool {
+        // The first only. A question is about one thing; a drag of four files
+        // onto Ask is a drag that wanted Hold or Add, and quietly answering it
+        // about one of the four would be picking on the user's behalf.
+        guard let entry = Self.entries(from: pasteboard).first else { return false }
+        attach(entry)
+        return true
+    }
+
     /// Parks everything on a dropped pasteboard. Returns how many landed.
     @discardableResult
     func add(pasteboard: NSPasteboard) -> Int {

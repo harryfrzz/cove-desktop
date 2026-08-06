@@ -35,6 +35,11 @@ struct NotchToast: Equatable, Sendable {
         NotchToast(text: "Held", systemImage: "tray.fill", count: count > 1 ? count : nil)
     }
 
+    /// Not a confirmation that anything happened, because nothing has yet — the
+    /// panel is about to open on a prompt bar with the thing attached, and this
+    /// is what the island says on the way there.
+    static let attached = NotchToast(text: "Ask about this", systemImage: "sparkles")
+
     static let nothingToSave = NotchToast(
         text: "Can't save",
         systemImage: "xmark.circle.fill",

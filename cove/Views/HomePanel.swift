@@ -87,6 +87,20 @@ struct HomePanel: View {
             // the window.
             guard !isOpen else { return }
             askedThreadID = nil
+            // The attachment goes with it, for the same reason. It was chosen
+            // for the question about to be typed, and a panel reopened tomorrow
+            // still holding it would answer an unrelated question about a file
+            // the user has forgotten pointing at.
+            tray.detach()
+        }
+        // A drop on Ask Cove. It lands wherever the panel happened to be, so
+        // this is what puts it back on the page the prompt bar is on and into
+        // the field — the drop chose the subject, and the next thing to happen
+        // is typing.
+        .onChange(of: model.askRequests) { _, _ in
+            scrolledPage = .home
+            model.requestFocus()
+            isPromptFocused = true
         }
         .onChange(of: tray.isEmpty) { _, isEmpty in
             // The last thing held has been taken somewhere and its page went
@@ -422,7 +436,69 @@ struct HomePanel: View {
 
     // MARK: - Prompt
 
+    /// The bar, with whatever the next question is about sitting above it.
+    ///
+    /// Above rather than inside. A chip in the capsule takes the room the
+    /// question is typed into — on a 320pt field a filename leaves space for
+    /// about four words — and it reads as part of what was typed, which is the
+    /// one thing it is not.
+    @ViewBuilder
     private var promptBar: some View {
+        VStack(spacing: 7) {
+            if let attached = tray.attached {
+                attachmentChip(attached)
+            }
+
+            promptField
+        }
+        .animation(.snappy(duration: 0.2), value: tray.attached?.id)
+    }
+
+    /// What the next question is about, and the way to say it isn't.
+    private func attachmentChip(_ entry: TempTray.Entry) -> some View {
+        HStack(spacing: 7) {
+            Image(nsImage: entry.preview ?? entry.icon)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 18, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+            Text(entry.name)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(CoveTheme.inkSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Button {
+                tray.detach()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(CoveTheme.inkTertiary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Ask about the shelf instead")
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 3)
+        .padding(.vertical, 4)
+        .background(CoveTheme.raised, in: Capsule())
+        .overlay { Capsule().strokeBorder(CoveTheme.hairline, lineWidth: 1) }
+        .frame(maxWidth: 320)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    /// Says what the bar will do with what is typed into it. All three states
+    /// are real: an attachment changes what the question is about, and no model
+    /// changes what comes back.
+    private var placeholder: String {
+        if tray.attached != nil { return "Ask about this…" }
+        return assistant.isReady ? "Ask Cove…" : "Search your shelf…"
+    }
+
+    private var promptField: some View {
         HStack(spacing: 9) {
             Image(systemName: "sparkles")
                 .font(.system(size: 11, weight: .semibold))
@@ -430,10 +506,7 @@ struct HomePanel: View {
 
             // Names the reduced thing when the model is missing, so the bar does
             // not promise an answer it will come back from with a list.
-            TextField(
-                assistant.isReady ? "Ask Cove…" : "Search your shelf…",
-                text: $model.promptText
-            )
+            TextField(placeholder, text: $model.promptText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(CoveTheme.ink)
@@ -569,17 +642,53 @@ struct HomePanel: View {
 /// `originalTarget` is the resting position the scroll view started this
 /// interaction from, which is what makes "one step" mean one step from the page
 /// you were on rather than from wherever momentum had reached.
+///
+/// What decides *whether* to step is the part that took two attempts. Rounding
+/// the projected target to the nearest page — the obvious reading of "snap" —
+/// makes the gesture demand half a page of travel before it commits to
+/// anything, and a two-finger swipe on a trackpad does not travel half of 460pt
+/// unless it is thrown. Every ordinary swipe fell back to the page it started
+/// on, which reads as the panel refusing to turn rather than as a threshold not
+/// being met.
+///
+/// So a flick counts on its own. Past `flickVelocity` the direction of the
+/// gesture is the answer and the distance is irrelevant; below it, a fifth of a
+/// page is enough to commit. Those are the two ways a person actually asks for
+/// the next page — throw it, or push it and let go — and either one now turns
+/// exactly one.
 private struct OnePageAtATime: ScrollTargetBehavior {
     let pageWidth: CGFloat
+
+    /// Points per second past which the gesture is a flick and its length no
+    /// longer matters. Low enough that a lazy two-finger push clears it, high
+    /// enough that the drift at the end of a slow drag does not.
+    private static let flickVelocity: CGFloat = 220
+
+    /// How far a slow drag must travel to count, as a fraction of the page.
+    /// A fifth: far enough not to fire on a nudge, near enough that the page is
+    /// visibly following the fingers before it commits.
+    private static let commitFraction: CGFloat = 0.2
 
     func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
         guard pageWidth > 0 else { return }
 
-        let start = (context.originalTarget.rect.minX / pageWidth).rounded()
-        let proposed = (target.rect.minX / pageWidth).rounded()
-        let stepped = min(max(proposed, start - 1), start + 1)
+        let origin = context.originalTarget.rect.minX
+        let start = (origin / pageWidth).rounded()
+        let travelled = target.rect.minX - origin
+        let velocity = context.velocity.dx
 
-        target.rect.origin.x = stepped * pageWidth
+        // One of three answers: forward, back, or stay. Never two pages, whatever
+        // the momentum proposed.
+        let step: CGFloat
+        if abs(velocity) >= Self.flickVelocity {
+            step = velocity > 0 ? 1 : -1
+        } else if abs(travelled) >= pageWidth * Self.commitFraction {
+            step = travelled > 0 ? 1 : -1
+        } else {
+            step = 0
+        }
+
+        target.rect.origin.x = (start + step) * pageWidth
     }
 }
 
@@ -639,54 +748,89 @@ private struct ChatHistoryPage: View {
     }
 
     private var list: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header("Recent")
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline) {
+                header("Recent")
+
+                Spacer(minLength: 8)
+
+                Text("\(threads.count) \(threads.count == 1 ? "chat" : "chats")")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(CoveTheme.inkTertiary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(CoveTheme.raised, in: Capsule())
+                    .overlay { Capsule().strokeBorder(CoveTheme.hairline, lineWidth: 1) }
+                    .accessibilityLabel("\(threads.count) recent chats")
+            }
+            .padding(.trailing, Self.inset)
 
             ScrollView {
-                VStack(spacing: 7) {
+                IslandMasonryLayout(minimumColumnWidth: 178, spacing: 9) {
                     ForEach(threads) { thread in
                         Button {
                             openThread = thread
                         } label: {
-                            row(thread)
+                            card(thread)
                         }
                         .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, Self.inset)
-                .padding(.bottom, 6)
+                // The cards are allowed to sit slightly apart from the heading
+                // and the page dots. That gives the wall enough visual edge to
+                // read as a collection rather than the same list in columns.
+                .padding(.top, 1)
+                .padding(.bottom, 8)
             }
             .scrollIndicators(.never)
         }
     }
 
-    private func row(_ thread: ChatThread) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(thread.title.isEmpty ? "Untitled" : thread.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(CoveTheme.ink)
-                    .lineLimit(1)
+    /// A conversation needs more than a single stripped line to be recognisable
+    /// later. Giving the question and answer room to breathe also creates the
+    /// uneven heights that make the compact wall worth using over a grid.
+    private func card(_ thread: ChatThread) -> some View {
+        let reply = thread.orderedTurns.last(where: { $0.role == .assistant })?.text
 
-                if let reply = thread.orderedTurns.last(where: { $0.role == .assistant }) {
-                    Text(reply.text)
-                        .font(.system(size: 10))
-                        .foregroundStyle(CoveTheme.inkTertiary)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
+        return VStack(alignment: .leading, spacing: 8) {
             Text(thread.updatedAt.formatted(.relative(presentation: .numeric, unitsStyle: .narrow)))
-                .font(.system(size: 9))
+                .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(CoveTheme.inkTertiary)
                 .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(CoveTheme.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let reply, !reply.isEmpty {
+                Text(reply)
+                    .font(.system(size: 10))
+                    .foregroundStyle(CoveTheme.inkSecondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("Waiting for Cove…")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(CoveTheme.inkTertiary)
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        // A hit area the width of the row, not the width of the words.
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .background(CoveTheme.raised, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // A single card is the tap target — not just its label — so the space
+        // left by a short reply remains as easy to open as the words themselves.
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(CoveTheme.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(CoveTheme.hairline, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 7, y: 3)
     }
 
     private func transcript(of thread: ChatThread) -> some View {
@@ -706,10 +850,6 @@ private struct ChatHistoryPage: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-
-                Spacer(minLength: 4)
-
-                openInAppButton(thread)
             }
             .padding(.horizontal, Self.inset)
 
@@ -739,6 +879,15 @@ private struct ChatHistoryPage: View {
                 .animation(.spring(response: 0.34, dampingFraction: 0.7), value: turns.count)
             }
             .scrollIndicators(.never)
+
+            // This is an action on the whole conversation, so it belongs after
+            // the transcript rather than alongside the title it merely happens
+            // to be opened from. Keeping it outside the scroll view also means
+            // it remains reachable after a long answer.
+            openInAppButton(thread)
+                .padding(.horizontal, Self.inset)
+                .padding(.top, 2)
+                .padding(.bottom, 7)
         }
     }
 
@@ -763,12 +912,15 @@ private struct ChatHistoryPage: View {
                 Image(systemName: "macwindow")
                     .font(.system(size: 9, weight: .semibold))
                 Text("Open in App")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
             }
             .foregroundStyle(CoveTheme.ink)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            // The action gets the island's one wide, tactile surface. This is
+            // deliberately the glass effect rather than `raised`: it floats
+            // over the transcript instead of looking like another message.
             .glassEffect(.regular.interactive(), in: Capsule())
             // The glass is drawn outside the label, so without this only the
             // glyph and the words take a click.
@@ -807,6 +959,81 @@ private struct ChatHistoryPage: View {
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(CoveTheme.inkTertiary)
             .padding(.horizontal, Self.inset)
+    }
+}
+
+/// Packs chat cards into the shortest column. The island uses two columns at
+/// its normal width, but this remains a one-column list if an accessibility
+/// size or a future panel size leaves less room than a readable card needs.
+private struct IslandMasonryLayout: Layout {
+    var minimumColumnWidth: CGFloat
+    var spacing: CGFloat
+
+    typealias Cache = Void
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) -> CGSize {
+        let width = resolvedWidth(from: proposal)
+        let columnWidth = columnWidth(for: width)
+        var heights = Array(repeating: CGFloat.zero, count: columnCount(for: width))
+
+        for subview in subviews {
+            let column = shortestColumn(in: heights)
+            let size = subview.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil))
+            heights[column] += (heights[column] == 0 ? 0 : spacing) + size.height
+        }
+
+        return CGSize(width: width, height: heights.max() ?? 0)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) {
+        let width = max(bounds.width, 1)
+        let columnWidth = columnWidth(for: width)
+        var heights = Array(repeating: CGFloat.zero, count: columnCount(for: width))
+
+        for subview in subviews {
+            let column = shortestColumn(in: heights)
+            let y = bounds.minY + heights[column] + (heights[column] == 0 ? 0 : spacing)
+            let size = subview.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil))
+
+            subview.place(
+                at: CGPoint(
+                    x: bounds.minX + CGFloat(column) * (columnWidth + spacing),
+                    y: y
+                ),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: columnWidth, height: size.height)
+            )
+            heights[column] = y - bounds.minY + size.height
+        }
+    }
+
+    private func resolvedWidth(from proposal: ProposedViewSize) -> CGFloat {
+        guard let width = proposal.width, width.isFinite, width > 0 else {
+            return minimumColumnWidth
+        }
+        return width
+    }
+
+    private func columnCount(for width: CGFloat) -> Int {
+        max(1, Int((width + spacing) / (minimumColumnWidth + spacing)))
+    }
+
+    private func columnWidth(for width: CGFloat) -> CGFloat {
+        let count = CGFloat(columnCount(for: width))
+        return (width - spacing * (count - 1)) / count
+    }
+
+    private func shortestColumn(in heights: [CGFloat]) -> Int {
+        heights.indices.min { heights[$0] < heights[$1] } ?? 0
     }
 }
 
@@ -977,10 +1204,14 @@ private struct DropTargets: View {
     @Bindable var model: NotchModel
 
     var body: some View {
-        HStack(spacing: 14) {
+        // Three across a panel the width of a notch, so the subtitles are
+        // shorter than they were and the type is a size down. The alternative
+        // was two rows, which puts the third answer somewhere a drag already
+        // heading for the first two has to be taken back out of.
+        HStack(spacing: 10) {
             target(
                 zone: .hold,
-                title: "Hold here",
+                title: "Hold",
                 subtitle: "Until you quit",
                 systemImage: "tray.full",
                 tint: CoveTheme.ink
@@ -989,9 +1220,17 @@ private struct DropTargets: View {
             target(
                 zone: .save,
                 title: "Add to Cove",
-                subtitle: "Saved to the shelf",
+                subtitle: "Kept on the shelf",
                 systemImage: "square.stack.3d.up.fill",
                 tint: CoveTheme.accent
+            )
+
+            target(
+                zone: .ask,
+                title: "Ask Cove",
+                subtitle: "Read, not kept",
+                systemImage: "sparkles",
+                tint: CoveTheme.ink
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1009,18 +1248,23 @@ private struct DropTargets: View {
     ) -> some View {
         let isTargeted = model.hoveredDropZone == zone
 
-        return VStack(spacing: 8) {
+        return VStack(spacing: 7) {
             Image(systemName: systemImage)
-                .font(.system(size: 20, weight: .light))
+                .font(.system(size: 18, weight: .light))
                 .foregroundStyle(isTargeted ? tint : tint.opacity(0.65))
             VStack(spacing: 2) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(CoveTheme.ink)
                 Text(subtitle)
-                    .font(.system(size: 10))
+                    .font(.system(size: 9))
                     .foregroundStyle(CoveTheme.inkTertiary)
             }
+            // Three columns in 416pt leaves ~130 each. Nothing here should wrap
+            // to two lines and change the height of one target but not its
+            // neighbours.
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -1086,7 +1330,28 @@ private struct TrayPage: View {
     /// Adaptive rather than a fixed column count: the panel is one width today,
     /// but a held item is a fixed size and the row should fill whatever it is
     /// given rather than leave a gap on the right.
-    private static let columns = [GridItem(.adaptive(minimum: 84), spacing: 9, alignment: .top)]
+    ///
+    /// Wide enough that a screenshot is legible as itself. At 84 a held capture
+    /// was a stamp — you could tell it apart from a spreadsheet and not much
+    /// else, which is thin for the one page whose whole job is showing what you
+    /// are carrying.
+    private static let columns = [GridItem(.adaptive(minimum: 124), spacing: 14, alignment: .top)]
+
+    /// How far a card leans, and always the same way for the same card.
+    ///
+    /// Derived from the entry's id rather than its position, which is the part
+    /// that matters. Tilting by index looks identical on a full tray and is
+    /// wrong the moment one is removed: every card behind the gap would shuffle
+    /// to a new angle, so taking one thing off the shelf visibly disturbs the
+    /// others. An id is fixed for the life of the entry, so a card is only ever
+    /// tilted once.
+    ///
+    /// Never nearer than 1.5° to straight. Below that it stops reading as a
+    /// scatter and starts reading as a layout fault.
+    private static func tilt(for entry: TempTray.Entry) -> Double {
+        let magnitude = 1.5 + Double(entry.id.uuid.0 % 32) / 32 * 3.5
+        return entry.id.uuid.1 % 2 == 0 ? magnitude : -magnitude
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1098,13 +1363,16 @@ private struct TrayPage: View {
             // scroll here is vertical, which also keeps it out of the way of the
             // horizontal swipe between pages.
             ScrollView(.vertical) {
-                LazyVGrid(columns: Self.columns, spacing: 10) {
+                LazyVGrid(columns: Self.columns, spacing: 16) {
                     ForEach(tray.entries) { entry in
                         card(entry)
                     }
                 }
-                .padding(.horizontal, Self.inset)
-                .padding(.bottom, 6)
+                // Room for the lean. A tilted card reaches past the box the grid
+                // gave it, and without this the corner nearest the edge is the
+                // first thing the scroll view cuts off.
+                .padding(.horizontal, Self.inset - 6)
+                .padding(.vertical, 8)
             }
             .scrollIndicators(.never)
         }
@@ -1139,9 +1407,9 @@ private struct TrayPage: View {
     /// preview, the name, the remove button — is in service of knowing which one
     /// to grab.
     private func card(_ entry: TempTray.Entry) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 7) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(CoveTheme.raised)
 
                 if let preview = entry.preview {
@@ -1152,26 +1420,33 @@ private struct TrayPage: View {
                     Image(nsImage: entry.icon)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 40, height: 40)
                 }
             }
             // Height fixed, width taken from the grid cell, so every row lines
             // up whatever shape the things in it are.
-            .frame(height: 54)
+            .frame(height: 80)
             .frame(maxWidth: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(CoveTheme.hairline, lineWidth: 1)
             }
+            // What makes the tilt read as a card lying on something rather than
+            // as a picture drawn crooked. Under the name as well as the picture
+            // would smear the text, so it stops at the frame.
+            .shadow(color: .black.opacity(0.45), radius: 7, y: 4)
 
             Text(entry.name)
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(CoveTheme.inkSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity)
         }
+        // The whole card leans, name included: a straight caption under a tilted
+        // picture reads as the picture having slipped.
+        .rotationEffect(.degrees(Self.tilt(for: entry)))
         // The card is the drag handle, so the whole of it has to be draggable —
         // including the gap between the picture and the name. The overlay is
         // what carries the drag, and it covers the card for the same reason.
@@ -1183,7 +1458,8 @@ private struct TrayPage: View {
                 onAccepted: { tray.handOff(entry) },
                 onSave: { save(entry) },
                 onRemove: { tray.remove(entry) },
-                onOpen: { entry.open() }
+                onOpen: { entry.open() },
+                onAsk: { tray.attach(entry) }
             )
         }
         .help(entry.name)
@@ -1209,6 +1485,7 @@ private struct TrayDragOut: NSViewRepresentable {
     let onSave: () -> Void
     let onRemove: () -> Void
     let onOpen: () -> Void
+    let onAsk: () -> Void
 
     func makeNSView(context: Context) -> TrayDragOutView {
         let view = TrayDragOutView()
@@ -1227,6 +1504,7 @@ private struct TrayDragOut: NSViewRepresentable {
         view.onSave = onSave
         view.onRemove = onRemove
         view.onOpen = onOpen
+        view.onAsk = onAsk
     }
 }
 
@@ -1237,6 +1515,7 @@ final class TrayDragOutView: NSView, NSDraggingSource {
     var onSave: (() -> Void)?
     var onRemove: (() -> Void)?
     var onOpen: (() -> Void)?
+    var onAsk: (() -> Void)?
 
     /// The island is a non-activating panel and is usually not the key window.
     /// Without this the first press only brings it forward and the drag it was
@@ -1279,6 +1558,11 @@ final class TrayDragOutView: NSView, NSDraggingSource {
             action: #selector(openEntry),
             keyEquivalent: ""
         ).target = self
+        menu.addItem(
+            withTitle: "Ask Cove About This",
+            action: #selector(askAboutEntry),
+            keyEquivalent: ""
+        ).target = self
         menu.addItem(.separator())
         // Keeping it comes first of the remaining two: it is the one that
         // cannot be undone by doing the other.
@@ -1306,6 +1590,10 @@ final class TrayDragOutView: NSView, NSDraggingSource {
 
     @objc private func removeEntry() {
         onRemove?()
+    }
+
+    @objc private func askAboutEntry() {
+        onAsk?()
     }
 
     func draggingSession(

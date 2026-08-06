@@ -214,18 +214,17 @@ private struct CoveWindowView: View {
                 guard let requested else { return }
                 openingChat = requested
                 model.pendingChat = nil
-                // The album is somewhere else the window can be, and arriving
-                // into Chats from underneath it would leave both up.
+                // The album and settings are somewhere else the window can be,
+                // and arriving into Chats from underneath either would leave
+                // both up — settings visibly so, since it is drawn on top.
                 openAlbum = nil
+                isShowingSettings = false
                 withAnimation(.easeOut(duration: 0.2)) { isShowingChats = true }
             }
             // The window title is the only place a screen names itself, so it
             // follows the screen rather than staying on the app's name.
             .navigationTitle(title)
             .toolbar { toolbarContent }
-            .sheet(isPresented: $isShowingSettings) {
-                SettingsView()
-            }
             .sheet(
                 isPresented: Binding(
                     get: { selectedItem != nil },
@@ -275,6 +274,8 @@ private struct CoveWindowView: View {
     }
 
     private var title: String {
+        // Innermost screen first, in the order they are drawn over each other.
+        if isShowingSettings { return "Settings" }
         if isShowingChats { return "Chats" }
         return openAlbum?.title ?? "Cove"
     }
@@ -315,6 +316,13 @@ private struct CoveWindowView: View {
                     ChatHistoryScreen(opening: openingChat, newChatRequests: newChatRequests)
                         .transition(.opacity)
                 }
+
+                // Over all three, because Settings can be opened from any of
+                // them and is the screen being read once it is.
+                if isShowingSettings {
+                    SettingsView()
+                        .transition(.opacity)
+                }
             }
             // The shelf recedes so one item can be looked at. Disabling it as
             // well as blurring it means a stray click lands on the overlay's
@@ -353,15 +361,20 @@ private struct CoveWindowView: View {
         // not offering.
         if onboarding.isFinished {
             ToolbarItem(placement: .navigation) {
-                // Both the album and the chats are screens the window went into,
-                // so both leave by the same door.
-                if openAlbum != nil || isShowingChats {
+                // The album, the chats and settings are all screens the window
+                // went into, so they all leave by the same door.
+                if openAlbum != nil || isShowingChats || isShowingSettings {
                     backButton
                 }
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
-                if isShowingChats {
+                // Settings offers nothing: Refresh and Select act on a shelf
+                // that isn't on screen, and a Settings button on Settings is a
+                // control that does nothing when pressed.
+                if isShowingSettings {
+                    EmptyView()
+                } else if isShowingChats {
                     // Nothing else on this screen acts on the shelf, and a
                     // Refresh that reprocessed every capture from inside a
                     // conversation would be a button with no visible effect and
@@ -522,20 +535,30 @@ private struct CoveWindowView: View {
             Label("Back", systemImage: "chevron.left")
                 .labelStyle(.iconOnly)
         }
-        // The fade belongs to the album's implode; chats leaves by a plain
-        // crossfade and must not inherit a chrome value the album left behind.
-        .opacity(isShowingChats ? 1 : albumChrome)
-        .accessibilityLabel("Back to library")
+        // The fade belongs to the album's implode; chats and settings leave by a
+        // plain crossfade and must not inherit a chrome value the album left
+        // behind.
+        .opacity(isShowingChats || isShowingSettings ? 1 : albumChrome)
+        .accessibilityLabel(isShowingSettings || isShowingChats ? "Back" : "Back to library")
     }
 
-    /// Leaves whichever screen the window went into. Chats first: it is drawn
-    /// over the album, so it is the one being looked at when both are up.
+    /// Leaves whichever screen the window went into, outermost first — which is
+    /// to say in the order they are drawn over each other, so the one being
+    /// looked at is the one that goes.
     private func goBack() {
+        if isShowingSettings {
+            leaveSettings()
+            return
+        }
         if isShowingChats {
             withAnimation(.easeOut(duration: 0.2)) { isShowingChats = false }
             return
         }
         closeAlbum()
+    }
+
+    private func leaveSettings() {
+        withAnimation(.easeOut(duration: 0.2)) { isShowingSettings = false }
     }
 
     @MainActor
@@ -835,7 +858,7 @@ private struct CoveWindowView: View {
 
     private var settingsButton: some View {
         Button {
-            isShowingSettings = true
+            withAnimation(.easeOut(duration: 0.2)) { isShowingSettings = true }
         } label: {
             Label("Settings", systemImage: "gearshape")
         }

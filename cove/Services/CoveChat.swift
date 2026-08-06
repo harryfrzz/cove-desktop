@@ -89,6 +89,42 @@ enum CoveChat {
         let matches = (try? await AIServices.current.search.search(question, in: items)) ?? []
         let assistant = CoveAssistant.shared
 
+        // A link in the message is a request to look at it. Only the first —
+        // two pages is twice the context window's biggest single item, and a
+        // message with two links in it is asking about the pair rather than
+        // about either one in depth.
+        //
+        // Fetched before the model is asked rather than offered to it as a
+        // tool. A tool call would be the tidier shape and is the wrong one
+        // here: this model stops calling its tools exactly when the context is
+        // tight, which is the same moment a page has been pasted into it, so
+        // the feature would go quiet precisely when it was being used.
+        //
+        // Only when there is a model to read it to. Without one the reply is a
+        // list of what the shelf matched, which a page cannot improve — and
+        // fetching it anyway would put a request on the network in the one case
+        // where nothing could come of it.
+        //
+        // The attachment is read first and wins. A thing dropped on Ask Cove is
+        // what the user pointed at; a link in the sentence is something they
+        // mentioned. Both at once would spend the whole window on context and
+        // leave the shelf with nothing.
+        var held: HeldReading?
+        var page: WebPage?
+
+        if assistant.isReady, let attached = TempTray.shared.attached {
+            held = await HeldReader.read(attached)
+        }
+        if assistant.isReady, held == nil,
+           let link = WebLookupService.links(in: question).first {
+            page = await WebLookupService.read(link)
+        }
+
+        // Spent, whether or not anything could be read from it. The attachment
+        // is for the next question and this is it — leaving it set would quietly
+        // make every following question in the conversation about the same file.
+        TempTray.shared.detach()
+
         switch assistant.readiness {
         case .unavailable(let reason):
             exchange.reply.text = retrieved(matches, unavailable: reason)
@@ -107,7 +143,9 @@ enum CoveChat {
                 let reply = try await assistant.answer(
                     to: question,
                     grounding: grounding,
-                    matched: !matches.isEmpty
+                    matched: !matches.isEmpty,
+                    web: page,
+                    held: held
                 ) { partial in
                     exchange.reply.text = partial
                 }

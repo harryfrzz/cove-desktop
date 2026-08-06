@@ -286,10 +286,25 @@ final class NotchController: NSObject {
                 sourceApp: NSWorkspace.shared.frontmostApplication?.localizedName
             )
             landed = .saved(count: count)
+        case .ask:
+            count = TempTray.shared.attach(pasteboard: pasteboard) ? 1 : 0
+            landed = .attached
         }
 
         endDrag()
         NotchActivityCenter.shared.post(count == 0 ? .nothingToSave : landed)
+
+        // Asking is the one drop that is not finished when it lands. The other
+        // two are the whole gesture — the thing is held, or it is on the shelf —
+        // where this one has only chosen what the question is about. So the
+        // panel is kept up and put back on the page with the prompt bar on it,
+        // rather than collapsing to a toast and making the user reopen it to
+        // type the question they were already going to type.
+        if zone == .ask, count > 0 {
+            model.askRequests &+= 1
+            open()
+        }
+
         return count > 0
     }
 

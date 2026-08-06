@@ -22,15 +22,21 @@ final class NotchModel {
     /// A text field has focus. Auto-close is suspended while this is true:
     /// closing the panel mid-sentence loses the sentence.
     var isEditing = false
-    /// Where a drop can land. Both are drawn by the panel; which one the drag
-    /// is over is decided in AppKit, against the frames below.
+    /// Where a drop can land. All three are drawn by the panel; which one the
+    /// drag is over is decided in AppKit, against the frames below.
+    ///
+    /// Three answers to the same drag, and they are genuinely different
+    /// questions rather than degrees of one. Hold carries it until Cove quits,
+    /// Save keeps it on the shelf, Ask reads it for the next question and keeps
+    /// nothing.
     enum DropZone: String {
         case hold
         case save
+        case ask
     }
 
-    /// A drag is over the island right now, so the panel is showing its two
-    /// drop targets instead of the home face.
+    /// A drag is over the island right now, so the panel is showing its drop
+    /// targets instead of the home face.
     var isDropTargeted = false
     /// Which target the drag is over, if either.
     var hoveredDropZone: DropZone?
@@ -43,6 +49,14 @@ final class NotchModel {
     /// session already in flight is not reliably picked up. One AppKit
     /// destination that exists before the drag arrives, plus these frames, is.
     var dropZoneFrames: [DropZone: CGRect] = [:]
+    /// Drops onto Ask Cove, counted so the panel can act on each one.
+    ///
+    /// A counter rather than a flag because the request is an event: attaching
+    /// two things in a row is two drops, and a bool set true by the first and
+    /// already true for the second would swallow it. The same shape the window's
+    /// New Chat button uses, and for the same reason.
+    var askRequests = 0
+
     /// Held open regardless of hover or focus. Debug builds use it so a
     /// screenshot can catch the open state.
     var holdsOpen = false

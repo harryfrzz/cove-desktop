@@ -9,63 +9,50 @@ import SwiftUI
 /// diagnostics dump, and nobody opens Settings to read one. What matters is
 /// whether a thing is on, how far it has got, and the one switch that decides
 /// if Cove ever touches the network.
+///
+/// A screen the window goes into rather than a sheet over it. Settings is read
+/// as much as it is changed — the coverage figures and the install progress are
+/// things to sit with — and a modal that dimmed the shelf behind it made a page
+/// of running state feel like a question waiting to be answered. The window
+/// titlebar carries the way back, the same one the album and Chats use.
 struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var model = SettingsModel()
     /// Shared singletons rather than page-owned state: an install started here
-    /// keeps running if the sheet is dismissed, and reopening Settings shows it
+    /// keeps running if the screen is left, and coming back to Settings shows it
     /// still going instead of an idle button.
     @State private var installer = MobileCLIPInstaller.shared
-    @State private var updater = UpdateChecker.shared
     @State private var appearance = CoveAppearanceStore.shared
     @State private var screenshots = ScreenshotWatcher.shared
     /// Held rather than read once, so the row follows Apple Intelligence
     /// finishing its download while this page is open.
     @State private var assistant = CoveAssistant.shared
-    @State private var onboarding = CoveOnboarding.shared
     @State private var connections = CoveConnections.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    appearanceSection
-                    onThisMac
-                    screenshotSection
-                    holdingSection
-                    modelSection
-                    connectionsSection
-                    shelfSection
-                    privacySection
-                    updatesSection
-                    introductionSection
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                appearanceSection
+                onThisMac
+                screenshotSection
+                holdingSection
+                modelSection
+                connectionsSection
+                shelfSection
+                privacySection
             }
+            .padding(24)
+            // The window is resizable and these rows are prose as much as
+            // controls. Left to fill it, a toggle's label sat a full window's
+            // width from its switch. The column keeps the measure the page was
+            // written at and centres it in whatever it is given.
+            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 480, height: 470)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Drawn opaque for the same reason Chats is: this is somewhere else the
+        // window can be, not a layer over the shelf.
         .background(CoveTheme.windowBackground)
         .task { await model.load() }
-    }
-
-    private var header: some View {
-        HStack {
-            Text("Settings")
-                .font(.title3.weight(.semibold))
-
-            Spacer()
-
-            Button("Done") { dismiss() }
-                .buttonStyle(.glass)
-                .keyboardShortcut(.cancelAction)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
     }
 
     private var onThisMac: some View {
@@ -242,41 +229,6 @@ struct SettingsView: View {
         }
     }
 
-    private var updatesSection: some View {
-        SettingsSection("Updates") {
-            SettingsRow("Version", value: updater.currentVersion)
-
-            switch updater.state {
-            case .checking:
-                SettingsRow("Status", value: "Checking…", tone: .muted)
-            case .upToDate:
-                SettingsRow("Status", value: "Cove is up to date", badge: "On")
-            case .available(let version, _):
-                SettingsRow("Status", value: "Version \(version) is available")
-            case .failed(let reason):
-                SettingsRow("Status", value: reason, tone: .warning)
-            case .idle:
-                EmptyView()
-            }
-
-            HStack(spacing: 10) {
-                Button("Check for Updates") {
-                    Task { await updater.check() }
-                }
-                .disabled(updater.isChecking)
-
-                if case .available(_, let url) = updater.state {
-                    Button("Open Release") { NSWorkspace.shared.open(url) }
-                }
-
-                if updater.isChecking {
-                    ProgressView().controlSize(.small)
-                }
-            }
-            .padding(.top, 4)
-        }
-    }
-
     /// Calendar, Reminders and Notes — what Cove may reach, and what it does
     /// with each.
     ///
@@ -366,26 +318,6 @@ struct SettingsView: View {
         }
     }
 
-    private var introductionSection: some View {
-        SettingsSection("Introduction") {
-            SettingsRow(
-                "First run",
-                value: onboarding.isFinished ? "Done" : "Showing"
-            )
-
-            // The only way back to it. Everything the introduction sets is on
-            // this page too, so this is for reading what Cove said rather than
-            // for changing anything — which is why it says "Show" and not
-            // "Reset".
-            Button("Show Introduction Again") {
-                onboarding.reset()
-                dismiss()
-            }
-            .disabled(!onboarding.isFinished)
-            .padding(.top, 4)
-        }
-    }
-
     private var shelfSection: some View {
         SettingsSection("Shelf") {
             SettingsRow("Saved items", value: "\(model.coverage.totalItems)")
@@ -416,6 +348,20 @@ struct SettingsView: View {
             )
             .toggleStyle(.switch)
 
+            Toggle(
+                "Read links pasted into Ask Cove",
+                isOn: Binding(
+                    get: { model.readsPastedLinks },
+                    set: { model.readsPastedLinks = $0 }
+                )
+            )
+            .toggleStyle(.switch)
+
+            Text("Paste a link into a question and Cove fetches that page so the answer is about what is on it. Only the address you sent, and only when you send one — there is no search, and nothing else about you goes with the request. Off, a pasted link is read as text.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             // The one claim on this page worth spelling out, because it is the
             // one a user cannot check for themselves.
             Text("Everything else stays on this Mac.")
@@ -436,6 +382,10 @@ private final class SettingsModel {
 
     var fetchLinkPreviews: Bool = LinkPreviewService.isEnabled {
         didSet { LinkPreviewService.setEnabled(fetchLinkPreviews) }
+    }
+
+    var readsPastedLinks: Bool = WebLookupService.isEnabled {
+        didSet { WebLookupService.setEnabled(readsPastedLinks) }
     }
 
     var clearsHeldAfterDrag: Bool = TempTray.clearsAfterDrag {
