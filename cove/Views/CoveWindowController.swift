@@ -155,7 +155,7 @@ private struct CoveWindowView: View {
     /// apart. See `ChatHistoryScreen.newChatRequests`.
     @State private var newChatRequests = 0
     /// Whether Cove has introduced itself yet. Shared rather than owned by this
-    /// view, so Settings can put the introduction back.
+    /// view: the flag outlives the window, which is rebuilt on every open.
     @State private var onboarding = CoveOnboarding.shared
     /// Narrows the library to one kind of thing. Not persisted: a filter that
     /// outlived the session would hide captures the user knows they saved.

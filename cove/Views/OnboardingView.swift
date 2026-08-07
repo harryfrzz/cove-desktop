@@ -28,13 +28,6 @@ final class CoveOnboarding {
         isFinished = true
         UserDefaults.standard.set(true, forKey: Self.key)
     }
-
-    /// Puts the flow back. Only Settings calls this — it is a way to re-read
-    /// what Cove said at the start, not a state the app enters on its own.
-    func reset() {
-        isFinished = false
-        UserDefaults.standard.set(false, forKey: Self.key)
-    }
 }
 
 /// What Cove says the first time the window is opened.
